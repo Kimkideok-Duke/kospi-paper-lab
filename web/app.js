@@ -41,7 +41,7 @@ function stamp(value) {
 }
 const safe = value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 const defaultState = {
-  initial: 10000000, limit: 5, start: "2026-11-25", end: "2026-12-25", connected: false, finished: false,
+  initial: 10000000, limit: 5, start: "2026-11-25", end: "2026-12-25", connected: false, finished: false, batchEnabled: false,
   totals: { total: 10000000, cash: 10000000, realized: 0, pnl: 0 }, history: [], positions: [], trades: [], scans: [],
 };
 const demoAt = Date.parse("2026-12-10T15:00:00+09:00");
@@ -54,7 +54,7 @@ const sampleHistory = [10000000, 10081000, 10044500, 10170000, 10125300, 1020500
   10335000, 10445000, 10390800, 10450300, 10428000, 10594300, 10667400];
 const demo = {
   ...defaultState, latest: { at: demoAt, observed: 1814, universe: 1824, etfs: 873, index: 3291.42, indexChange: 0.84 },
-  connected: true, now: demoAt, next: demoAt + 3600000,
+  connected: true, batchEnabled: true, now: demoAt, next: demoAt + 3600000,
   history: sampleHistory.map((total, i) => ({ total, time: demoAt - (sampleHistory.length - 1 - i) * 86400000 })),
   positions: demoPositions, totals: { total: 10667400, cash: 5790700, realized: 471100, pnl: 667400 },
   trades: [
@@ -168,13 +168,14 @@ function render() {
   setText("#active-count", s.positions.length + " / " + s.limit);
   $$(".segments i").forEach((segment, index) => segment.classList.toggle("full", index < s.positions.length));
   const lastRun = s.scans.at(-1);
-  setText("#last-run", lastRun ? stamp(lastRun.time) : "대기 중");
-  setText("#next-run", s.finished ? "기간 종료" : s.connected ? (s.next ? stamp(s.next) : "예정 없음") : "연결 후 시작");
+  setText("#batch-status", !loaded && !preview ? "확인 중" : s.batchEnabled ? "사이트 서버 배치" : "이 서버에서 미실행");
+  setText("#last-run", lastRun ? stamp(lastRun.time) : "—");
+  setText("#next-run", s.finished ? "기간 종료" : !s.batchEnabled ? "—" : s.connected ? (s.next ? stamp(s.next) : "예정 없음") : "연결 후 시작");
   setText("#coverage", latest ? n.format(latest.observed) + " / " + n.format(latest.universe) + "종목" : "—");
   setText("#kospi", latest?.index != null ? fixed.format(latest.index) + (latest.indexChange != null ? " (" + pct(latest.indexChange) + ")" : "") : "—");
   $("#kospi").className = tone(latest?.indexChange ?? 0);
   const missing = latest?.missing?.length && lastRun?.status === "ok";
-  setText("#activity-text", s.finished ? "모의투자 기간이 종료되었습니다." : !s.connected ? "토스증권 API를 연결하면 매 정시에 분석합니다."
+  setText("#activity-text", s.finished ? "모의투자 기간이 종료되었습니다." : !s.batchEnabled ? "이 주소에서는 정시 배치가 실행되지 않습니다." : !s.connected ? "토스증권 API를 연결하면 매 정시에 분석합니다."
     : lastRun ? lastRun.message + (missing ? " 일부 보조 데이터는 조회되지 않았습니다." : "") : "API가 연결되었습니다. 다음 정시부터 분석합니다.");
   const quoteTime = Math.max(0, ...s.positions.map(p => p.quoteTime));
   setText("#holdings-note", quoteTime ? "최근 체결가 기준 · " + stamp(quoteTime) : "최근 체결가 기준 평가손익");
@@ -364,7 +365,7 @@ $("#api-form").addEventListener("submit", async event => {
     $("#client-secret").type = "password";
     $("#reveal").setAttribute("aria-pressed", "false");
     $("#reveal").setAttribute("aria-label", "시크릿 표시");
-    showResult("토스증권 API를 연결했습니다. 다음 정시부터 분석합니다.");
+    showResult(data.batchEnabled ? "토스증권 API를 연결했습니다. 다음 정시부터 분석합니다." : "토스증권 API를 연결했습니다. 이 주소에서는 정시 배치가 실행되지 않습니다.");
     await refresh();
   } catch (error) {
     showResult(error.message, true);
@@ -392,4 +393,3 @@ selectPage(location.pathname);
 refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 25000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
-

@@ -2,7 +2,6 @@ export const INITIAL = 10_000_000;
 export const LIMIT = 5;
 export const START = "2026-11-25";
 export const END = "2026-12-25";
-export const WON = new Intl.NumberFormat("ko-KR");
 
 export function kst(now) {
   return new Date(now + 9 * 3600_000).toISOString();

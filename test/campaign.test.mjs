@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { INITIAL, account, execute, initialState, slotFor } from "../server/engine.mjs";
+import { startBatch } from "../server/batch.mjs";
 import "../scripts/build.mjs";
 
 const { default: app, runSlot } = await import("../dist/server/index.js");
@@ -87,6 +88,16 @@ test("server links keys, evaluates a fixture ETF, persists amounts and deduplica
     : { method: "POST", headers: { "oai-authenticated-user-id": "owner", "content-type": "application/json", origin: "https://test.local" },
       body: JSON.stringify(body) }), env);
   assert.equal((await api("/api/state", undefined, false)).status, 401);
+  const hosted = await (await api("/api/state")).json();
+  assert.equal(hosted.batchEnabled, false);
+  assert.equal(hosted.next, null);
+  assert.equal((await api("/api/automation/run", {})).status, 404);
+  assert.equal((await api("/api/run", {})).status, 404);
+  assert.equal((await api("/mcp", { method: "tools/list" })).status, 404);
+  env.MARKETLAB_BATCH = true;
+  const selfHosted = await (await api("/api/state")).json();
+  assert.equal(selfHosted.batchEnabled, true);
+  assert.equal(selfHosted.next, at("11:00"));
   assert.equal((await runSlot(env)).status, "waiting");
   assert.equal((await api("/api/connect", { id: "sample-id", secret: "sample-key" })).status, 200);
   const storage = JSON.stringify(database.prepare("SELECT * FROM campaign").get());
@@ -114,4 +125,22 @@ test("server links keys, evaluates a fixture ETF, persists amounts and deduplica
   assert.equal((await api("/api/disconnect", {})).status, 200);
   assert.equal((await (await api("/api/state")).json()).connected, false);
   assert.equal((await (await api("/api/state")).json()).trades.length, 2);
+});
+
+test("the server batch starts at the next exact hour without any browser request", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: at("10:00") - 7000 });
+  const runs = [];
+  const stop = startBatch(async now => {
+    runs.push(now);
+    return { status: "ok", message: "done" };
+  }, () => {});
+  t.after(stop);
+  assert.deepEqual(runs, []);
+  t.mock.timers.tick(6999);
+  assert.deepEqual(runs, []);
+  t.mock.timers.tick(1);
+  await Promise.resolve();
+  assert.deepEqual(runs, [at("10:00")]);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(runs, [at("10:00")]);
 });

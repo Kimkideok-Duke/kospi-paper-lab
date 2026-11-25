@@ -1,4 +1,4 @@
-import { INITIAL, LIMIT, START, END, WON, account, initialState, kst, slotFor } from "./engine.mjs";
+import { INITIAL, LIMIT, START, END, account, initialState, kst, slotFor } from "./engine.mjs";
 import { issue, loadPrices, marketClient, scan, TossError } from "./toss.mjs";
 import { assets } from "./assets.mjs";
 
@@ -145,7 +145,7 @@ function nextSlot(now) {
   return null;
 }
 
-function view(row) {
+function view(row, batchEnabled) {
   const state = row ? JSON.parse(row.state) : initialState();
   const now = Date.now();
   const date = kst(now).slice(0, 10);
@@ -158,7 +158,7 @@ function view(row) {
     }
   }
   return {
-    start: START, end: END, now, next, initial: INITIAL, limit: LIMIT,
+    start: START, end: END, now, next: batchEnabled ? next : null, batchEnabled, initial: INITIAL, limit: LIMIT,
     connected: Boolean(row?.secrets), totals: account(state),
     positions: state.positions, trades: state.trades,
     history: state.history, scans: state.scans.slice(-100),
@@ -196,60 +196,14 @@ function safeError(error) {
   return "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 }
 
-const tools = [
-  { name: "marketlab_run_hour", description: "서버의 현재 한국 시간 정시 구간을 확인해 토스증권 코스피·ETF 모의투자를 1회 실행하고 거래 내용을 반환합니다. 키 미연결 시 대기합니다.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "marketlab_status", description: "API 연결 여부와 최근 실행 상태를 확인합니다.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-];
-
-async function mcp(request, env) {
-  const call = await body(request);
-  const version = "2026-07-28";
-  let result;
-  if (call.method === "server/discover") result = { supportedVersions: [version], capabilities: { tools: {} } };
-  else if (call.method === "initialize") result = { protocolVersion: version, capabilities: { tools: {} }, serverInfo: { name: "marketlab", version: "1.0.0" } };
-  else if (call.method === "notifications/initialized") return new Response(null, { status: 202 });
-  else if (call.method === "ping") result = {};
-  else if (call.method === "tools/list") result = { tools };
-  else if (call.method === "tools/call") {
-    authenticate(request);
-    let output;
-    try {
-      if (call.params?.name === "marketlab_run_hour") output = await runSlot(env);
-      else if (call.params?.name === "marketlab_status") {
-        const data = view(await record(env));
-        output = { connected: data.connected, finished: data.finished, next: data.next, last: data.scans.at(-1) ?? null };
-      } else return json({ jsonrpc: "2.0", id: call.id ?? null, error: { code: -32602, message: "Unknown tool" } });
-      const lines = [output.message, ...(output.trades ?? []).map(trade =>
-        trade.name + " " + (trade.side === "BUY" ? "매수" : "매도") + " " + WON.format(trade.amount) + "원, " + trade.reason +
-        ", 거래 실현손익 " + WON.format(trade.realized) + "원, 총 평가자산 " + WON.format(trade.total) +
-        "원, 누적손익 " + WON.format(trade.totalPnl) + "원")].filter(Boolean);
-      result = { content: [{ type: "text", text: JSON.stringify(output) + (lines.length ? "\n" + lines.join("\n") : "") }] };
-    } catch (error) {
-      result = { isError: true, content: [{ type: "text", text: safeError(error) }] };
-    }
-  } else return json({ jsonrpc: "2.0", id: call.id ?? null, error: { code: -32601, message: "Method not found" } });
-  return json({ jsonrpc: "2.0", id: call.id ?? null, result });
-}
-
 async function handler(request, env) {
   const { pathname } = new URL(request.url);
-  if (pathname === "/mcp" && request.method === "POST") return mcp(request, env);
-  // Sites dispatch permits this route only for the owner or the site's scoped service caller.
-  if (pathname === "/api/automation/status" && request.method === "GET") {
-    const data = view(await record(env));
-    return json({ connected: data.connected, finished: data.finished, next: data.next, last: data.scans.at(-1) ?? null });
-  }
-  if (pathname === "/api/automation/run" && request.method === "POST") {
-    if (request.headers.has("origin")) requireSameOrigin(request);
-    await body(request);
-    return json(await runSlot(env));
-  }
   if (pathname.startsWith("/api/")) {
     authenticate(request);
-    if (pathname === "/api/state" && request.method === "GET") return json(view(await record(env)));
+    if (pathname === "/api/state" && request.method === "GET") return json(view(await record(env), env.MARKETLAB_BATCH === true));
     if (pathname === "/api/quotes" && request.method === "GET") {
       const row = await record(env);
-      const data = view(row);
+      const data = view(row, env.MARKETLAB_BATCH === true);
       if (data.finished || !row?.access_token || !data.positions.length) return json({ quotes: {} });
       const slot = slotFor(Math.floor(Date.now() / 3600_000) * 3600_000);
       if (!slot || slot.review) return json({ quotes: {} });
@@ -273,7 +227,6 @@ async function handler(request, env) {
           return { connected: false };
         }));
       }
-      if (pathname === "/api/run") return json(await runSlot(env));
     }
     return json({ error: "페이지를 찾을 수 없습니다." }, 404);
   }
@@ -299,5 +252,3 @@ export default {
   },
 };
 export { runSlot };
-
-

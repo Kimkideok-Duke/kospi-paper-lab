@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { startBatch } from "../server/batch.mjs";
 import "./build.mjs";
 
 const { default: app, runSlot } = await import("../dist/server/index.js");
@@ -31,7 +32,7 @@ const DB = {
     return { ...bind(), bind };
   },
 };
-const env = { DB, MARKETLAB_KEY: readFileSync(keyFile, "utf8") };
+const env = { DB, MARKETLAB_KEY: readFileSync(keyFile, "utf8"), MARKETLAB_BATCH: withSchedule };
 
 const server = createServer(async (req, res) => {
   try {
@@ -58,23 +59,11 @@ const server = createServer(async (req, res) => {
     res.end();
   }
 });
-server.listen(port, "127.0.0.1", () => console.log("Market Lab → " + origin));
-if (withSchedule) {
-  let previousSlot;
-  const scheduledRun = async () => {
-    const time = Date.now();
-    const hour = Math.floor(time / 3600_000);
-    if (previousSlot === hour || time % 3600_000 >= 15 * 60_000) return;
-    previousSlot = hour;
-    try {
-      const result = await runSlot(env, time);
-      if (result.status !== "outside") console.log(result.message);
-      if (result.status === "error" && time % 3600_000 < 12 * 60_000) previousSlot = undefined;
-    } catch (error) {
-      console.error(error.message);
-      previousSlot = undefined;
-    }
-  };
-  await scheduledRun();
-  setInterval(scheduledRun, 60_000).unref();
-}
+server.once("listening", () => {
+  console.log("Market Lab → " + origin);
+  if (withSchedule) {
+    const stopBatch = startBatch(time => runSlot(env, time));
+    server.once("close", stopBatch);
+  }
+});
+server.listen(port, "127.0.0.1");
