@@ -2,6 +2,7 @@ import { fresh, rate, percentage, weight } from "./engine.mjs";
 import { executeUs, usAccount, usdQuoteMap, validFx } from "./us-engine.mjs";
 import { collectOpeningNews, openingSignal, openingExitReason } from "./us-news.mjs";
 import { recordAnalytics } from "./paper-analytics.mjs";
+import { eventSignal, eventExitReason } from "./market-events.mjs";
 import { markPaper } from "./paper-model.mjs";
 
 const recent = (time, now, age = 90_000) => Number.isFinite(time) && time <= now + 3000 && now - time <= age;
@@ -81,7 +82,9 @@ export async function scanUs(state, slot, client, calendar) {
       || q.price * fx.rate > budget || q.price * fx.rate < 1000) return [];
     const hourly = rate(q.price, previous?.[stock.symbol]);
     const change = rate(q.price, Number(ranked.get(stock.symbol)?.price?.basePrice));
-    const signal = openingSignal(news, stock);
+    const opening = openingSignal(news, stock), live = eventSignal(state, stock, Date.now());
+    if (live.blocked || (slot.event && (!live.relevant || (state.eventWatch?.pending?.symbols?.length && !state.eventWatch.pending.symbols.includes(stock.symbol))))) return [];
+    const signal = { ...opening, score: opening.score + live.score, caution: opening.caution || live.caution, relevant: opening.relevant || live.relevant, reason: [opening.reason, live.reason].filter(Boolean).join(" · ") };
     if (hourly !== null && hourly < -0.15) return [];
     if (hourly === null && (change === null ? !signal.relevant : change < 0.25 || change > 12)) return [];
     return [{ ...stock, q, hourly, news: signal, score: 2 * weight(hourly ?? 0, -3, 3)
@@ -107,8 +110,8 @@ export async function scanUs(state, slot, client, calendar) {
   const finish = Date.now();
   if (state.paperModel?.enabled) markPaper(state, "US", quotes, fillFx, finish);
   const baselineEquity = usAccount(state).total;
-  const trades = executeUs(state, { now: finish, slot, quotes, fx: fillFx, candidates, previous, books,
-    openingExit: news ? (position, price) => openingExitReason(news, position, price, Number(ranked.get(position.symbol)?.price?.basePrice)) : null });
+  const trades = executeUs(state, { now: finish, slot, quotes, fx: fillFx, candidates, previous, books, event: slot.event,
+    openingExit: (position, price) => eventExitReason(state, position, price, previous?.[position.symbol], finish, "US") ?? (news ? openingExitReason(news, position, price, Number(ranked.get(position.symbol)?.price?.basePrice)) : null) });
   if (!slot.manual && !slot.review && finish < slot.regularEnd) state.previous = { date: slot.date, index: slot.index,
     prices: Object.fromEntries([...quotes].filter(([, q]) => fresh(q, finish, slot.regularStart)).map(([symbol, q]) => [symbol, q.price])) };
   const totals = usAccount(state);

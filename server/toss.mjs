@@ -2,6 +2,7 @@ import { account, execute, fresh, kst, marketPhase, percentage, quoteMap, rate, 
 import { collectOpeningNews, openingExitReason, openingSignal } from "./us-news.mjs";
 import { recordAnalytics } from "./paper-analytics.mjs";
 import { markPaper } from "./paper-model.mjs";
+import { eventSignal, eventExitReason } from "./market-events.mjs";
 import { marketTransport, MarketTransportError } from "./market-transport.mjs";
 
 const MARKET = "/api/v1/";
@@ -103,7 +104,9 @@ function shortlist(universe, quotes, prior, context, now, start, held, budget) {
     if (held.has(stock.symbol) || !fresh(q, now, start) || q.price > budget || q.price < 1000) continue;
     const sessionChange = rate(q.price, context.ranked.get(stock.symbol)?.price?.basePrice);
     const hourly = rate(q.price, prior?.[stock.symbol]);
-    const news = openingSignal(context.news, stock);
+    const opening = openingSignal(context.news, stock), live = eventSignal(context.state, stock, now);
+    if (live.blocked || (context.event && (!live.relevant || (context.eventSymbols?.length && !context.eventSymbols.includes(stock.symbol))))) continue;
+    const news = { ...opening, score: opening.score + live.score, caution: opening.caution || live.caution, relevant: opening.relevant || live.relevant, reason: [opening.reason, live.reason].filter(Boolean).join(" · ") };
     if (hourly !== null && hourly < -0.15) continue;
     if (hourly === null && sessionChange !== null && (sessionChange < 0.25 || sessionChange > 12)) continue;
     if (hourly === null && sessionChange === null && !news.relevant) continue;
@@ -208,7 +211,7 @@ export async function scan(state, slot, client, now) {
   const index = indicators?.find(item => item.symbol === "KOSPI");
   const benchmark = indexCandles?.candles?.find(item => item.timestamp.slice(0, 10) < slot.date);
   const indexChange = index && benchmark ? rate(Number(index.lastPrice), Number(benchmark.closePrice)) : null;
-  const context = { ranked, indexChange, news };
+  const context = { ranked, indexChange, news, state, event: slot.event, eventSymbols: state.eventWatch?.pending?.symbols };
   const flow = flows?.records?.[0];
   const net = flow?.foreigner ? Number(flow.foreigner.buyAmount) - Number(flow.foreigner.sellAmount) : null;
   const prior = state.previous?.date === slot.date && Number.isFinite(state.previous.time)
@@ -241,8 +244,8 @@ export async function scan(state, slot, client, now) {
   if (state.paperModel?.enabled) markPaper(state, "KR", quotes, null, finish);
   const baselineEquity = account(state).total;
   const trades = execute(state, { now: finish, regularStart, regularEnd, quotes, previous: prior, candidates,
-    review: phase === "review", manual: slot.manual, books,
-    openingExit: news ? (position, price) => openingExitReason(news, position, price, ranked.get(position.symbol)?.price?.basePrice) : null });
+    review: phase === "review", manual: slot.manual, event: slot.event, books,
+    openingExit: (position, price) => eventExitReason(state, position, price, prior?.[position.symbol], finish, "KR") ?? (news ? openingExitReason(news, position, price, ranked.get(position.symbol)?.price?.basePrice) : null) });
   const freshQuotes = [...quotes.entries()].filter(([, q]) => fresh(q, finish, regularStart));
   if (phase === "trade" && !slot.manual) {
     state.previous = { date: slot.date, hour: slot.hour, time: now,

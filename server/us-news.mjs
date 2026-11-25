@@ -70,7 +70,7 @@ function newsUrl(text, host) {
   }
 }
 
-function relevantTopics(title, source) {
+export function relevantTopics(title, source) {
   return Object.keys(indicators).filter(key => {
     if (key === "rates" && /\b(?:european central bank|bank of japan|bank of england|ecb|boj)\b/i.test(title)
       && !/\b(?:the fed|federal reserve|u\.?s\.?)\b/i.test(title)) return false;
@@ -79,7 +79,7 @@ function relevantTopics(title, source) {
   });
 }
 
-function articleSignals(title, description, source, matches) {
+export function articleSignals(title, description, source, matches) {
   const signals = {};
   for (const topic of matches) {
     const [up, down] = directions[topic] ?? [positive, negative];

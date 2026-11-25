@@ -1,4 +1,4 @@
-export const MODEL_VERSION = "paper-v3-unrestricted-allocation";
+export const MODEL_VERSION = "paper-v4-intraday-events";
 export const defaults = market => ({ commissionBps: market === "US" ? 10 : 1.5, taxBps: market === "US" ? 0 : 20,
   fxSpreadBps: market === "US" ? 10 : 0, participationPct: 10, limitBps: 20, ttlSeconds: 300 });
 export const activeOrder = order => ["PENDING", "PARTIAL_FILLED"].includes(order.status);
@@ -13,10 +13,10 @@ export function upgradePaper(state, market, now) {
   state.operations ??= {};
   if (!state.paperModel || state.paperModel.code !== MODEL_VERSION) {
     const config = state.paperModel?.config ?? defaults(market);
-    for (const order of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) { order.status = "CANCELED"; order.note = "매수 비중 제한 해제: 다음 분석에서 새 비중으로 평가"; }
+    for (const order of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) { order.status = "CANCELED"; order.note = "전략 버전 변경: 다음 분석에서 새 규칙으로 평가"; }
     state.paperModel = { enabled: true, code: MODEL_VERSION, version: MODEL_VERSION + ":" + (state.versions.length + 1), config, appliedAt: now };
     state.versions.push({ id: state.paperModel.version, time: now, baseline: paperTotal(state, market),
-      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 1분 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · −2.5%/+5%" });
+      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 1분 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · −2.5%/+5%" });
   }
   return state;
 }
@@ -60,7 +60,7 @@ function amounts(price, quantity, side, type, market, fx, config) {
   return { gross, commission, transactionTax, fxSpread, settlement: side === "BUY" ? gross + commission + fxSpread : gross - commission - transactionTax - fxSpread };
 }
 export function executePaper(state, { market, now, regularStart, regularEnd, quotes, books = new Map(), candidates = [], previous,
-  review = false, manual = false, monitor = false, fx = null, reasonFor, openingExit }) {
+  review = false, manual = false, monitor = false, event = false, fx = null, reasonFor, openingExit }) {
   const config = state.paperModel.config;
   if (market === "KR") fx ??= { rate: 1, from: now, until: now + 60000 };
   if (!fx || !Number.isFinite(fx.rate) || !(fx.rate > 0) || !Number.isFinite(fx.from) || !Number.isFinite(fx.until)
@@ -72,14 +72,14 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
     order.status = "EXPIRED"; order.note = order.filledQuantity ? "잔량 유효시간 종료" : "미체결 유효시간 종료";
   }
   if (review || now < regularStart || now >= regularEnd) return [];
-  const source = monitor ? "monitor" : manual ? "manual" : "batch", trades = [], sold = new Set();
+  const source = event ? "event" : monitor ? "monitor" : manual ? "manual" : "batch", trades = [], sold = new Set();
   const pending = (symbol, side) => state.paperOrders.some(o => activeOrder(o) && o.symbol === symbol && o.side === side);
   function newOrder(stock, side, quantity, quote, reason) {
     state.nextPaperOrder = (state.nextPaperOrder ?? 0) + 1;
     state.paperOrders.push({ id: "sim:" + market + ":" + state.nextPaperOrder, symbol: stock.symbol, name: stock.name, type: stock.type,
       side, quantity, filledQuantity: 0, status: "PENDING", reference: quote.price,
       limitPrice: quote.price * (1 + (side === "BUY" ? 1 : -1) * config.limitBps / 10000),
-      createdAt: now, expiresAt: Math.min(now + config.ttlSeconds * 1000, regularEnd), reason, source,
+      createdAt: now, expiresAt: Math.min(now + config.ttlSeconds * 1000, regularEnd), reason, source: reason.startsWith("장중 ") ? "event" : source,
       strategyVersion: state.paperModel.version, config: { ...config }, note: "최신 호가와 잔량 확인 중" });
   }
   for (const p of [...state.positions]) {
@@ -94,7 +94,7 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
   }
   if (!monitor) for (const c of candidates) {
     const occupied = new Set([...state.positions.map(p => p.symbol), ...state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY").map(o => o.symbol)]);
-    if (occupied.size >= 5 || occupied.has(c.symbol) || pending(c.symbol, "SELL")) continue;
+    if (occupied.size >= 5 || occupied.has(c.symbol) || pending(c.symbol, "SELL") || (state.eventWatch?.blocks?.[c.symbol]?.until ?? 0) > now) continue;
     const q = quotes.get(c.symbol);
     if (!fresh(q) || !c.validPrice(q.price)) continue;
     const reserved = state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY").reduce((sum, o) => sum + amounts(o.limitPrice, o.quantity - o.filledQuantity, "BUY", o.type, market, fx.rate, o.config).settlement, 0);
@@ -172,7 +172,7 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
       state.liquidityUsage[key] = { quantity: used + quantity, time };
       const total = paperTotal(state, market);
       const trade = { id: String(state.trades.length + 1), market, time: now, quoteTime: q.time, orderId: order.id,
-        strategyVersion: order.strategyVersion, source, symbol: order.symbol, name: order.name, type: order.type, side: order.side,
+        strategyVersion: order.strategyVersion, source: order.source === "event" ? "event" : source, symbol: order.symbol, name: order.name, type: order.type, side: order.side,
         quantity, price: level.price * fx.rate, amount: costs.gross, cashAmount: costs.settlement, costs: { commission: costs.commission, transactionTax: costs.transactionTax, fxSpread: costs.fxSpread, slippage },
         reason: order.reason, realized, total, totalPnl: total - 10_000_000, priceEffectKrw, fxEffectKrw,
         costEffectKrw: order.side === "SELL" ? realized - priceEffectKrw - fxEffectKrw : 0,

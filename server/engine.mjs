@@ -107,9 +107,9 @@ function tradeRow(state, position, side, quote, reason, time, realized, manual) 
   };
 }
 
-export function execute(state, { now, regularStart, regularEnd, quotes, previous, candidates, review, openingExit, manual, books, monitor }) {
+export function execute(state, { now, regularStart, regularEnd, quotes, previous, candidates, review, openingExit, manual, books, monitor, event }) {
   if (state.paperModel?.enabled) return executePaper(state, { market: "KR", now, regularStart, regularEnd, quotes, previous,
-    candidates, review, openingExit, manual, books, monitor, reasonFor: sellReason });
+    candidates, review, openingExit, manual, books, monitor, event, reasonFor: sellReason });
   mark(state, quotes, now);
   const trades = [];
   if (review || now < regularStart || now >= regularEnd) return trades;

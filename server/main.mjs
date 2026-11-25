@@ -5,6 +5,7 @@ import { initialUsState, usAccount, usDate, usSlotFor, nextUsSlot, validFx, exec
 import { loadUsPrices, scanUs } from "./us-paper.mjs";
 import { upgradePaper, alertPaper, setPaperConfig, activeOrder, markPaper } from "./paper-model.mjs";
 import { analyticsView, recordAnalytics } from "./paper-analytics.mjs";
+import { marketEvents, ingestEvents, eventExitReason, eventsView, EVENT_POLICY } from "./market-events.mjs";
 import { marketTransport } from "./market-transport.mjs";
 
 const encode = new TextEncoder();
@@ -135,10 +136,11 @@ async function runMarketCheck(env, slot) {
       }
       draft.lastError = null;
       draft.operations.lastAnalysis = Date.now();
+      if (slot.event && draft.eventWatch?.pending?.id === slot.id.split(":").at(-1)) { draft.eventWatch.pending = null; draft.eventWatch.lastEventAnalysis = Date.now(); }
       draft.scans = draft.scans.filter(item => item.id !== slot.id);
       draft.scans.push({ id: slot.id, time: Date.now(), status: result.status,
         message: result.message, tradeCount: result.trades?.length ?? 0,
-        ...(slot.manual ? { source: "manual", tradeIds: result.trades?.map(trade => trade.id) ?? [] } : {}),
+        ...(slot.manual ? { source: slot.event ? "event" : "manual", tradeIds: result.trades?.map(trade => trade.id) ?? [] } : {}),
         ...(result.news ? { news: result.news } : {}) });
       await write(draft, row.secrets, tokenPayload);
       return { ...result, trades: result.trades ?? [] };
@@ -148,7 +150,7 @@ async function runMarketCheck(env, slot) {
       state.lastError = { time: Date.now(), message, ...(error.group ? { group: error.group, endpoint: error.endpoint, retryAfter: error.retryAfter } : {}) };
       state.scans = state.scans.filter(item => item.id !== slot.id);
       state.scans.push({ id: slot.id, time: Date.now(), status: "error", message, tradeCount: 0,
-        ...(slot.manual ? { source: "manual" } : {}) });
+        ...(slot.manual ? { source: slot.event ? "event" : "manual" } : {}) });
       await write(state, row.secrets, tokenPayload);
       return { status: "error", message, trades: [] };
     }
@@ -170,7 +172,7 @@ async function usRecord(env) {
   return env.DB.prepare("SELECT * FROM us_campaign WHERE id=1").first();
 }
 
-async function runUsSlot(env, now = Date.now(), requestId = null) {
+async function runUsSlot(env, now = Date.now(), requestId = null, eventId = null) {
   if (usDate(now) < START || usDate(now) >= END) return { status: "outside", message: "미국장 모의투자 기간이 아닙니다.", trades: [] };
   if (!(await record(env))?.secrets) return { status: "waiting", message: "공유 토스증권 API 연결을 기다리고 있습니다.", trades: [] };
   return locked(env, async (credentials, writeCredentials, owner) => {
@@ -210,6 +212,7 @@ async function runUsSlot(env, now = Date.now(), requestId = null) {
       }
       const calendar = state.calendar.result;
       slot = usSlotFor(calendar, now, requestId);
+      if (slot && eventId) slot = { ...slot, id: "us:event:" + eventId, event: true };
       if (!slot) return { status: "outside", message: "미국 정규장 분석 구간이 아닙니다.", trades: [] };
       const previous = state.scans.find(log => log.id === slot.id && log.status !== "error");
       if (previous) {
@@ -228,9 +231,10 @@ async function runUsSlot(env, now = Date.now(), requestId = null) {
       }
       draft.lastError = null;
       draft.operations.lastAnalysis = Date.now();
+      if (slot.event && draft.eventWatch?.pending?.id === slot.id.split(":").at(-1)) { draft.eventWatch.pending = null; draft.eventWatch.lastEventAnalysis = Date.now(); }
       draft.scans = draft.scans.filter(log => log.id !== slot.id);
       draft.scans.push({ id: slot.id, time: Date.now(), status: result.status, message: result.message,
-        tradeCount: result.trades?.length ?? 0, ...(slot.manual ? { source: "manual", tradeIds: result.trades?.map(t => t.id) ?? [] } : {}),
+        tradeCount: result.trades?.length ?? 0, ...(slot.manual ? { source: slot.event ? "event" : "manual", tradeIds: result.trades?.map(t => t.id) ?? [] } : {}),
         ...(result.news ? { news: result.news } : {}) });
       await writeUs(draft);
       await writeCredentials(domestic, credentials.secrets, tokenPayload);
@@ -258,14 +262,14 @@ function usView(row, credentials, env) {
     batchEnabled, initial: INITIAL, limit: LIMIT, connected: Boolean(credentials?.secrets),
     canCheckIp: typeof env.connectionIp === "function", finished: usDate(now) >= END,
     totals: usAccount(state), positions: state.positions, trades: state.trades, history: state.history,
-    analytics: analyticsView(state, "US"),
+    analytics: analyticsView(state, "US"), eventWatch: eventsView(state, now),
     scans: state.scans.slice(-100), openingNews: state.scans.findLast(log => log.news)?.news ?? null,
     latest: state.latest, lastError: state.lastError, fx: state.fx,
     fxMode: "거래 시점 매매기준율로 원화 정산", selection: "NASDAQ·NYSE·AMEX 거래대금 상위 100종목 중 주식·ETF" };
 }
 
 async function runMonitor(env, now = Date.now()) {
-  const results = [];
+  const results = [], triggers = [];
   for (const market of ["KR", "US"]) {
     try {
       results.push(await locked(env, async (credentials, write, owner) => {
@@ -332,9 +336,15 @@ async function runMonitor(env, now = Date.now()) {
             if (!draft.alerts.some(a => a.key === key)) alertPaper(draft, key, "예정된 " + (market === "US" ? "미국장" : "국내장") + " 10분 분석이 완료되지 않았습니다.", now, "error");
           }
           if (!open) {
+            const snapshot = await (env.collectEvents ?? ((m, options) => marketEvents.collect(m, options)))(market, { closed: true });
+            ingestEvents(draft, snapshot, market, Date.now());
             for (const order of draft.paperOrders.filter(activeOrder)) { order.status = "EXPIRED"; order.note = "정규장 종료"; }
             draft.operations.status = "closed"; recordAnalytics(draft, market, now); await persist(draft); return { status: "outside" };
           }
+          const snapshot = await (env.collectEvents ?? (m => marketEvents.collect(m)))(market);
+          const freshEvents = ingestEvents(draft, snapshot, market, Date.now());
+          for (const item of freshEvents) alertPaper(draft, "event:" + item.fingerprint, item.source + " · " + item.title, now, item.direction < 0 ? "warning" : "info");
+          if (draft.eventWatch.sources.some(s => s.status !== "ok")) alertPaper(draft, "event-feed-error", "일부 뉴스·공시 피드를 확인하지 못했습니다. 장중 뉴스·공시 상태를 확인해 주세요.", now);
           const symbols = [...new Set([...draft.positions.map(p => p.symbol), ...draft.paperOrders.filter(activeOrder).map(o => o.symbol), ...(market === "US" ? ["SPY", "QQQ"] : ["069500"])])];
           const quotes = market === "US" ? await loadUsPrices(reads, symbols) : await loadPrices(reads, symbols);
           const fx = market === "US" ? validFx(await reads.get("exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW" }), Date.now()) : { rate: 1, from: now, until: Date.now() + 60000 };
@@ -348,8 +358,10 @@ async function runMonitor(env, now = Date.now()) {
           const finish = Date.now();
           markPaper(draft, market, quotes, fx, finish);
           const baselineEquity = market === "US" ? usAccount(draft).total : account(draft).total;
-          const trades = market === "US" ? executeUs(draft, { now: finish, slot: { date, regularStart: start, regularEnd: end }, quotes, fx, books, monitor: true })
-            : execute(draft, { now: finish, regularStart: start, regularEnd: end, quotes, books, candidates: [], monitor: true });
+          const previous = draft.previous?.date === date ? (draft.previous.prices ?? draft.previous) : null;
+          const openingExit = (position, price) => eventExitReason(draft, position, price, previous?.[position.symbol], finish, market);
+          const trades = market === "US" ? executeUs(draft, { now: finish, slot: { date, regularStart: start, regularEnd: end }, quotes, fx, books, monitor: true, openingExit })
+            : execute(draft, { now: finish, regularStart: start, regularEnd: end, quotes, books, candidates: [], monitor: true, openingExit });
           if (market === "US") draft.fx = fx;
           const benchmarks = (market === "US" ? ["SPY", "QQQ"] : ["069500"]).flatMap(symbol => {
             const q = quotes.get(symbol); return q && q.time >= start ? [{ symbol, name: symbol === "069500" ? "KODEX 200" : symbol, price: q.price, time: q.time, fx: fx.rate }] : [];
@@ -370,7 +382,12 @@ async function runMonitor(env, now = Date.now()) {
             draft.scans.push({ id: "monitor:" + Math.floor(now / 60000), time: finish, source: "monitor", status: "ok", tradeCount: trades.length, message: "1분 보유 감시에서 " + trades.length + "건의 모의 체결을 기록했습니다." });
             alertPaper(draft, "protective-fill:" + Math.floor(now / 60000), "보유 종목 감시에서 " + trades.length + "건의 모의 체결이 발생했습니다.", finish, "info");
           }
-          await persist(draft); return { status: "ok", trades };
+          const pending = draft.eventWatch.pending;
+          const ready = pending && finish - draft.eventWatch.lastAnalysisAttempt >= EVENT_POLICY.reanalysisMs;
+          if (ready) draft.eventWatch.lastAnalysisAttempt = finish;
+          await persist(draft);
+          if (ready) triggers.push({ market, id: pending.id });
+          return { status: "ok", trades };
         } catch (error) {
           state.operations.lastMonitor = now; state.operations.status = "error";
           state.operations.lastError = error.message;
@@ -379,6 +396,12 @@ async function runMonitor(env, now = Date.now()) {
         }
       }));
     } catch (error) { if (error.status !== 409) throw error; }
+  }
+  for (const trigger of triggers) {
+    try {
+      if (trigger.market === "US") results.push(await runUsSlot(env, Date.now(), trigger.id, trigger.id));
+      else { const slot = manualSlotFor(Date.now(), trigger.id); if (slot) results.push(await runMarketCheck(env, { ...slot, id: "kr:event:" + trigger.id, event: true })); }
+    } catch (error) { if (error.status !== 409) console.error("뉴스 추가 분석 실패", error.status ?? "internal"); }
   }
   return results;
 }
@@ -404,7 +427,7 @@ function view(row, env) {
     history: state.history, scans: state.scans.slice(-100),
     openingNews: state.scans.findLast(item => item.news)?.news ?? null,
     latest: state.latest, lastError: state.lastError,
-    analytics: analyticsView(state, "KR"),
+    analytics: analyticsView(state, "KR"), eventWatch: eventsView(state, now),
     finished: date >= END,
   };
 }

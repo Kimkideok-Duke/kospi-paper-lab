@@ -77,9 +77,9 @@ export function validFx(row, now) {
   }
   return { rate, from, until };
 }
-export function executeUs(state, { now, slot, quotes, fx, candidates = [], previous, openingExit, books, monitor }) {
+export function executeUs(state, { now, slot, quotes, fx, candidates = [], previous, openingExit, books, monitor, event }) {
   if (state.paperModel?.enabled) return executePaper(state, { market: "US", now, regularStart: slot.regularStart, regularEnd: slot.regularEnd,
-    quotes, fx, candidates, previous, openingExit, books, review: slot.review, manual: slot.manual, monitor, reasonFor: sellReason });
+    quotes, fx, candidates, previous, openingExit, books, review: slot.review, manual: slot.manual, monitor, event, reasonFor: sellReason });
   if (!fx || !Number.isFinite(fx.rate) || !(fx.rate > 0) || !Number.isFinite(fx.from) || !Number.isFinite(fx.until)
     || fx.from > now + 3000 || fx.until <= now || fx.until <= fx.from) throw new Error("미국장 모의 거래에 유효한 환율이 필요합니다.");
   state.fx = fx;

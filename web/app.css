@@ -114,3 +114,5 @@ td.symbol strong,td.total strong{display:block}.small,.scan-row time{font-size:.
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important}}
 .live-announcement:not(:empty){padding:10px 14px;border-radius:10px;background:#e9f7f0;color:#095d4b;margin-bottom:14px;font-size:.88rem}
 .hero-meta div>span{white-space:nowrap}
+
+.event-sources{display:flex;flex-wrap:wrap;gap:8px 16px;margin:12px 0}.event-source{font-size:.8rem;line-height:1.7}.event-card details{margin-top:14px}.event-card summary{cursor:pointer;font-size:.9rem}.event-card .news-items .small{display:block}

@@ -134,7 +134,7 @@ function tradeList(trades, emptyText) {
   if (!trades.length) return emptyImage("list", emptyText, "기록된 거래의 금액과 손익이 여기에 표시됩니다.");
   return table(["체결 시각", "종목", "구분", "거래 금액", "매매 이유", "거래 실현손익", "총 평가자산"], trades.map(t => {
     const buy = t.side === "BUY";
-    return "<tr><td>" + stamp(t.time) + (t.source === "manual" ? '<div class="small">수동 실행</div>' : t.source === "monitor" ? '<div class="small">보유 감시 체결</div>' : '') +
+    return "<tr><td>" + stamp(t.time) + (t.source === "manual" ? '<div class="small">수동 실행</div>' : t.source === "event" ? '<div class="small">뉴스·공시 반응</div>' : t.source === "monitor" ? '<div class="small">보유 감시 체결</div>' : '') +
       '</td><td class="symbol"><strong>' + safe(t.name) + '</strong><span class="small">' +
       safe(t.symbol) + " · " + safe(t.type) + '</span></td><td><span class="side ' + (buy ? "buy" : "sell") + '">' +
       (buy ? "매수" : "매도") + '</span></td><td><strong>' + money(t.amount) + '</strong><div class="small">' +
@@ -249,6 +249,7 @@ function render() {
   setText("#holdings-note", quoteTime ? "최근 체결가 기준 · " + stamp(quoteTime) : "최근 체결가 기준 평가손익");
   $("#holdings-list").innerHTML = positionsList(s.positions);
   $("#opening-news").innerHTML = openingNewsBrief(s.openingNews);
+  renderEvents(s.eventWatch);
 
   const reverse = [...s.trades].reverse();
   $("#recent-list").innerHTML = tradeList(reverse.slice(0, 5), "아직 체결된 거래가 없습니다");
@@ -258,7 +259,7 @@ function render() {
   const openBriefs = new Set($$("#scan-list details[open]").map(details => details.dataset.slot));
   $("#scan-list").innerHTML = s.scans.length ? [...s.scans].reverse().map(log =>
     '<div class="scan-row"><time datetime="' + new Date(log.time).toISOString() + '">' + stamp(log.time) +
-    "</time><div>" + (log.source === "manual" ? '<span class="plain-badge scan-mode">수동</span>' : log.source === "monitor" ? '<span class="plain-badge scan-mode">감시</span>' : '') + safe(log.message) +
+    "</time><div>" + (log.source === "manual" ? '<span class="plain-badge scan-mode">수동</span>' : log.source === "event" ? '<span class="plain-badge scan-mode">뉴스·공시</span>' : log.source === "monitor" ? '<span class="plain-badge scan-mode">감시</span>' : '') + safe(log.message) +
     (log.news ? '<details class="scan-news" data-slot="' + safe(log.id) + '"' +
       (openBriefs.has(log.id) ? ' open' : '') + '><summary>' + (us ? '개장 전 미국 뉴스' : '09시 미국 뉴스') + '</summary>'
       + openingNewsBrief(log.news) + '</details>' : '') + "</div></div>").join("") :
@@ -638,3 +639,12 @@ selectPage(location.pathname);
 refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 25000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+
+function renderEvents(watch) {
+  const status = {ok:"정상",closed:"장외 15분 확인",degraded:"일부 수집 장애",unavailable:"수집 확인 불가",waiting:"첫 감시 대기"};
+  setText("#event-health", status[watch?.status] ?? "첫 감시 대기");
+  const sources = (watch?.sources ?? []).map(source => '<span class="event-source ' + (source.status === "ok" ? "" : "loss") + '">' + safe(source.name) + ' · ' + safe({ok:"정상",blocked:"접근 차단",error:"조회 실패",stale:"확인 지연"}[source.status] ?? "대기") + (source.successAt ? ' · 최근 성공 ' + stamp(source.successAt) : '') + (source.status !== "ok" && source.nextAttempt ? ' · 재확인 ' + stamp(source.nextAttempt) : '') + '</span>').join('');
+  const links = (watch?.items ?? []).filter(item => item.link.startsWith("https://")).slice(0,8).map(item => '<li><a href="' + safe(item.link) + '" target="_blank" rel="noopener noreferrer">' + safe(item.title) + '</a><span class="small">' + safe(item.source) + ' · 게시 ' + stamp(item.time) + '</span></li>').join('');
+  const reactions = (watch?.reactions ?? []).slice(-5).reverse().map(item => '<div class="alert-row"><time>' + stamp(item.time) + '</time>' + safe(item.action) + ' · ' + safe(item.title) + '</div>').join('');
+  $("#event-watch").innerHTML = '<p class="news-meta">' + (watch?.lastChecked ? '최근 확인 ' + stamp(watch.lastChecked) : '정규장 중 API 연결 후 감시를 시작합니다.') + ' · 정보원 게시 지연과 수집 장애에 따라 반영이 늦을 수 있습니다.</p>' + '<div class="event-sources">' + sources + '</div>' + (reactions ? '<details><summary>최근 대응 기록</summary>' + reactions + '</details>' : '') + (links ? '<details><summary>최근 수집 뉴스·공시</summary><ul class="news-items">' + links + '</ul></details>' : '<p class="news-meta">수집 범위에 표시할 새 항목이 없습니다. 공시가 없는 것과 수집 장애는 위 상태에서 구분합니다.</p>');
+}

@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#f6f7fc">
   <title>마켓랩 | 국내·미국장 모의투자</title>
   <link rel="icon" href="/mark.svg">
-  <link rel="stylesheet" href="/app.css?v=20261126-accounts">
-  <script type="module" src="/app.js?v=20261126-accounts"></script>
+  <link rel="stylesheet" href="/app.css?v=20261126-events">
+  <script type="module" src="/app.js?v=20261126-events"></script>
 </head>
 <body>
   <header class="topbar">
@@ -97,6 +97,11 @@
       <article class="card data-card holdings">
         <div class="card-heading"><div><h2>보유 종목</h2><p id="holdings-note">현재가 기준 평가손익</p></div><span id="active-count" class="plain-badge">0 / 5</span></div>
         <div id="holdings-list"></div>
+      </article>
+
+      <article class="card data-card event-card">
+        <div class="card-heading"><div><h2>장중 뉴스·공시 감시</h2><p>뉴스 2분 · 공시 1분 · 보유 반응 판단 1분</p></div><span id="event-health" class="plain-badge">확인 대기</span></div>
+        <div id="event-watch" aria-live="polite"></div>
       </article>
 
       <article class="card data-card news-card">
