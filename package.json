@@ -1,0 +1,10 @@
+{
+  "name": "kospi-paper-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/local.mjs",
+    "test": "node --test"
+  }
+}
