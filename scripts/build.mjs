@@ -17,5 +17,6 @@ await Promise.all([
   copyFile("server/main.mjs", "dist/server/index.js"),
   copyFile("server/engine.mjs", "dist/server/engine.mjs"),
   copyFile("server/toss.mjs", "dist/server/toss.mjs"),
+  copyFile("server/us-news.mjs", "dist/server/us-news.mjs"),
   copyFile(".openai/hosting.json", "dist/.openai/hosting.json"),
 ]);

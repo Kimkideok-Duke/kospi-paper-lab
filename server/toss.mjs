@@ -1,4 +1,5 @@
 import { account, execute, fresh, kst, marketPhase, percentage, quoteMap, rate, weight } from "./engine.mjs";
+import { collectOpeningNews, openingExitReason, openingSignal } from "./us-news.mjs";
 
 const ORIGIN = "https://openapi.tossinvest.com";
 const MARKET = "/api/v1/";
@@ -101,13 +102,14 @@ function shortlist(universe, quotes, prior, context, now, start, held, budget) {
     if (held.has(stock.symbol) || !fresh(q, now, start) || q.price > budget || q.price < 1000) continue;
     const sessionChange = rate(q.price, context.ranked.get(stock.symbol)?.price?.basePrice);
     const hourly = rate(q.price, prior?.[stock.symbol]);
+    const news = openingSignal(context.news, stock);
     if (hourly !== null && hourly < -0.15) continue;
     if (hourly === null && sessionChange !== null && (sessionChange < 0.25 || sessionChange > 12)) continue;
-    if (hourly === null && sessionChange === null) continue;
+    if (hourly === null && sessionChange === null && !news.relevant) continue;
     const amount = Number(context.ranked.get(stock.symbol)?.tradingAmount ?? 0);
     const score = 2 * weight(hourly ?? 0, -3, 3) + 0.5 * weight(sessionChange ?? 0, -5, 5)
-      + 0.25 * Math.log10(1 + amount / 100_000_000);
-    candidates.push({ ...stock, q, hourly, sessionChange, score });
+      + 0.25 * Math.log10(1 + amount / 100_000_000) + news.score;
+    candidates.push({ ...stock, q, hourly, sessionChange, score, news });
   }
   return candidates.sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol));
 }
@@ -126,7 +128,8 @@ async function assess(client, stock, slot, phaseStart, context) {
   if (!Array.isArray(warnings) || warnings.length || !Number.isFinite(limitTime) || kst(limitTime).slice(0, 10) !== slot.date) return null;
   const spread = orderbookSpread(book, now);
   const candles = minuteStats(series, now, phaseStart, stock.q.price);
-  if (spread === null || spread > 0.65 || !candles || candles.amount < 20_000_000 || candles.momentum <= 0.15) return null;
+  const minimumMomentum = stock.news.caution ? 0.45 : 0.15;
+  if (spread === null || spread > 0.65 || !candles || candles.amount < 20_000_000 || candles.momentum <= minimumMomentum) return null;
   if (stock.hourly !== null && stock.hourly < 0.2) return null;
   if (context.indexChange !== null && context.indexChange < -1.5 && (stock.hourly ?? candles.momentum) < 0.65) return null;
   const upper = Number(limits.upperLimitPrice);
@@ -150,9 +153,10 @@ async function assess(client, stock, slot, phaseStart, context) {
     "최근 분봉 " + percentage(candles.momentum),
     "호가 간격 " + spread.toFixed(2) + "%",
     institutional ? (institutional > 0 ? "외국인·기관 순매수" : "외국인·기관 순매도") + " " + Math.abs(institutional).toLocaleString("ko-KR") + "주" : null,
+    stock.news.reason ? stock.news.reason + (stock.news.caution ? " 반영 · 주문 규모 축소" : " 반영") : null,
   ].filter(Boolean).join(" · ");
   return {
-    ...stock, reason,
+    ...stock, reason, allocation: stock.news.caution ? 0.65 : 1,
     score: stock.score + weight(candles.momentum, 0, 3) - spread
       + Math.sign(institutional ?? 0) * 0.2 + Math.sign(programNet ?? 0) * 0.1,
     validPrice: price => price > lower && price < upper && Math.abs(rate(price, stock.q.price)) <= 0.8,
@@ -181,13 +185,14 @@ export async function scan(state, slot, client, now) {
   }
   const universe = state.universe.stocks;
   const symbols = [...new Set([...universe.map(stock => stock.symbol), ...state.positions.map(p => p.symbol)])];
-  const [quotes, rankings, indicators, indexCandles, currency, flows] = await Promise.all([
+  const [quotes, rankings, indicators, indexCandles, currency, flows, news] = await Promise.all([
     loadPrices(client, symbols),
     client.get("rankings", { type: "MARKET_TRADING_AMOUNT", marketCountry: "KR", duration: "realtime", count: 100 }, true),
     client.get("market-indicators/prices", { symbols: "KOSPI,KOSDAQ" }, true),
     client.get("market-indicators/KOSPI/candles", { interval: "1d", count: 3 }, true),
     client.get("exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW" }, true),
     client.get("market-indicators/KOSPI/investor-trading", { interval: "1d", count: 1 }, true),
+    slot.hour === 9 && phase === "trade" ? collectOpeningNews(day, slot) : null,
   ]);
   if (quotes.size === 0) throw new Error("토스증권에서 유효한 현재가를 받지 못했습니다.");
   const regular = day.today.integrated.regularMarket;
@@ -198,7 +203,7 @@ export async function scan(state, slot, client, now) {
   const index = indicators?.find(item => item.symbol === "KOSPI");
   const benchmark = indexCandles?.candles?.find(item => item.timestamp.slice(0, 10) < slot.date);
   const indexChange = index && benchmark ? rate(Number(index.lastPrice), Number(benchmark.closePrice)) : null;
-  const context = { ranked, indexChange };
+  const context = { ranked, indexChange, news };
   const flow = flows?.records?.[0];
   const net = flow?.foreigner ? Number(flow.foreigner.buyAmount) - Number(flow.foreigner.sellAmount) : null;
   const prior = state.previous?.date === slot.date && state.previous.hour === slot.hour - 1 ? state.previous.prices : null;
@@ -224,7 +229,8 @@ export async function scan(state, slot, client, now) {
   }
 
   const finish = Date.now();
-  const trades = execute(state, { now: finish, regularStart, regularEnd, quotes, previous: prior, candidates, review: phase === "review" });
+  const trades = execute(state, { now: finish, regularStart, regularEnd, quotes, previous: prior, candidates, review: phase === "review",
+    openingExit: news ? (position, price) => openingExitReason(news, position, price, ranked.get(position.symbol)?.price?.basePrice) : null });
   const freshQuotes = [...quotes.entries()].filter(([, q]) => fresh(q, finish, regularStart));
   if (phase === "trade") {
     state.previous = { date: slot.date, hour: slot.hour,
@@ -244,6 +250,6 @@ export async function scan(state, slot, client, now) {
     : trades.length ? trades.length + "건의 모의 거래를 기록했습니다."
     : freshQuotes.length ? "시세를 분석했습니다. 체결 조건을 충족한 거래가 없었습니다."
     : "최신 체결가가 확인되지 않아 주문을 건너뛰었습니다.";
-  return { status: phase === "review" ? "review" : "ok", message, trades, totals };
+  return { status: phase === "review" ? "review" : "ok", message, trades, totals, news };
 }
 

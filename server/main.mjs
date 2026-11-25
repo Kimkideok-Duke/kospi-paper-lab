@@ -1,4 +1,4 @@
-import { INITIAL, LIMIT, START, END, account, initialState, kst, slotFor } from "./engine.mjs";
+import { INITIAL, LIMIT, START, END, account, initialState, kst, slotFor, slotTime } from "./engine.mjs";
 import { issue, loadPrices, marketClient, scan, TossError } from "./toss.mjs";
 import { assets } from "./assets.mjs";
 
@@ -91,7 +91,7 @@ async function configure(env, id, secret) {
 
 async function runSlot(env, now = Date.now()) {
   const slot = slotFor(now);
-  if (!slot) return { status: "outside", message: "캠페인 기간의 정시 실행 구간이 아닙니다.", trades: [] };
+  if (!slot || now < slotTime(slot)) return { status: "outside", message: "캠페인 기간의 배치 실행 구간이 아닙니다.", trades: [] };
   if (!(await record(env))?.secrets) return { status: "waiting", message: "토스증권 API 연결을 기다리고 있습니다.", trades: [] };
   return locked(env, async (row, write) => {
     const state = JSON.parse(row.state);
@@ -121,7 +121,8 @@ async function runSlot(env, now = Date.now()) {
       draft.lastError = null;
       draft.scans = draft.scans.filter(item => item.id !== slot.id);
       draft.scans.push({ id: slot.id, time: Date.now(), status: result.status,
-        message: result.message, tradeCount: result.trades?.length ?? 0 });
+        message: result.message, tradeCount: result.trades?.length ?? 0,
+        ...(result.news ? { news: result.news } : {}) });
       await write(draft, row.secrets, tokenPayload);
       return { ...result, trades: result.trades ?? [] };
     } catch (error) {
@@ -137,9 +138,10 @@ async function runSlot(env, now = Date.now()) {
 
 function nextSlot(now) {
   const minimum = Date.parse(START + "T09:00:00+09:00");
-  let attempt = Math.max(Math.floor(now / 3600_000) * 3600_000 + 3600_000, minimum);
+  let attempt = Math.max(Math.floor(now / 3600_000) * 3600_000, minimum);
   while (kst(attempt).slice(0, 10) < END) {
-    if (slotFor(attempt)) return attempt;
+    const slot = slotFor(attempt);
+    if (slot && slotTime(slot) > now) return slotTime(slot);
     attempt += 3600_000;
   }
   return null;
@@ -155,7 +157,7 @@ function view(row, env) {
     const nextBusinessDate = state.calendar.result?.nextBusinessDay?.date;
     const hasRegular = state.calendar.result?.today?.date === date && state.calendar.result.today.integrated?.regularMarket;
     if (nextBusinessDate && (!hasRegular || kst(next).slice(0, 10) !== date)) {
-      next = nextBusinessDate < END ? Date.parse(nextBusinessDate + "T09:00:00+09:00") : null;
+      next = nextBusinessDate < END ? slotTime({ id: nextBusinessDate + "T09", hour: 9 }) : null;
     }
   }
   return {
@@ -164,6 +166,7 @@ function view(row, env) {
     connected: Boolean(row?.secrets), totals: account(state),
     positions: state.positions, trades: state.trades,
     history: state.history, scans: state.scans.slice(-100),
+    openingNews: state.scans.findLast(item => item.news)?.news ?? null,
     latest: state.latest, lastError: state.lastError,
     finished: date >= END,
   };

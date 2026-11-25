@@ -1,4 +1,4 @@
-import { END, kst, slotFor } from "./engine.mjs";
+import { END, kst, slotFor, slotTime } from "./engine.mjs";
 
 const MINUTE = 60_000;
 
@@ -12,7 +12,7 @@ export function startBatch(run, report = console.info) {
     if (stopped || kst(now).slice(0, 10) >= END) return;
     const slot = slotFor(now);
     try {
-      if (slot && slot.id !== previousSlot) {
+      if (slot && slot.id !== previousSlot && now >= slotTime(slot)) {
         const result = await run(now);
         if (result.status !== "error") previousSlot = slot.id;
         if (result.status !== "outside") report(result.message);

@@ -141,6 +141,18 @@ function positionsList(positions) {
   }));
 }
 
+function openingNewsBrief(news) {
+  if (!news) return '<p class="news-summary">09시 회차가 완료되면 확인한 미국 뉴스와 판단을 표시합니다.</p>';
+  const outlook = { cautious: "시장 부담", positive: "시장 우호", neutral: "중립" }[news.stance];
+  const items = news.items.filter(item => item.link.startsWith("https://")).map(item => '<li><a href="' + safe(item.link) +
+    '" target="_blank" rel="noopener noreferrer">' + safe(item.title) + '</a><small>' + safe(item.source) + ' · ' +
+    stamp(item.time) + (item.themes.length ? ' · ' + safe(item.themes.join(' · ')) : '') + '</small></li>');
+  return '<p class="news-summary"><span class="plain-badge">' + safe(outlook) + '</span> ' + safe(news.message) + '</p>' +
+    '<p class="news-meta">' + stamp(news.from) + '–' + stamp(news.until) + ' · 관련 뉴스 ' + n.format(news.count) +
+    '건 · 피드 ' + n.format(news.available) + '/' + n.format(news.feedCount) + (news.fallbackWindow ? ' · 24시간 기준' : '') + '</p>' +
+    (items.length ? '<ul class="news-items">' + items.join('') + '</ul>' : '');
+}
+
 function render() {
   const s = current();
   const connected = $("#connection");
@@ -184,15 +196,19 @@ function render() {
   const quoteTime = Math.max(0, ...s.positions.map(p => p.quoteTime));
   setText("#holdings-note", quoteTime ? "최근 체결가 기준 · " + stamp(quoteTime) : "최근 체결가 기준 평가손익");
   $("#holdings-list").innerHTML = positionsList(s.positions);
+  $("#opening-news").innerHTML = openingNewsBrief(s.openingNews);
 
   const reverse = [...s.trades].reverse();
   $("#recent-list").innerHTML = tradeList(reverse.slice(0, 5), "아직 체결된 거래가 없습니다");
   const filtered = reverse.filter(trade => filter === "ALL" || filter === trade.side);
   setText("#trade-count", (filter === "ALL" ? "전체" : filter === "BUY" ? "매수" : "매도") + " " + n.format(filtered.length) + "건");
   $("#trade-list").innerHTML = tradeList(filtered, "선택한 조건에 맞는 거래가 없습니다");
+  const openBriefs = new Set($$("#scan-list details[open]").map(details => details.dataset.slot));
   $("#scan-list").innerHTML = s.scans.length ? [...s.scans].reverse().map(log =>
     '<div class="scan-row"><time datetime="' + new Date(log.time).toISOString() + '">' + stamp(log.time) +
-    "</time><span>" + safe(log.message) + "</span></div>").join("") :
+    "</time><div>" + safe(log.message) + (log.news ? '<details class="scan-news" data-slot="' + safe(log.id) + '"' +
+      (openBriefs.has(log.id) ? ' open' : '') + '><summary>09시 미국 뉴스</summary>'
+      + openingNewsBrief(log.news) + '</details>' : '') + "</div></div>").join("") :
     emptyImage("timer", "분석 기록이 없습니다", "API를 연결한 뒤 시간별 결과를 확인할 수 있습니다.");
   draw();
 }

@@ -17,6 +17,11 @@ export function slotFor(now) {
   return { date, hour, id: local.slice(0, 13), review: hour === 16 };
 }
 
+export function slotTime(slot) {
+  const minute = slot.hour === 9 ? "03" : "00";
+  return Date.parse(slot.id + ":" + minute + ":00+09:00");
+}
+
 export function initialState() {
   return {
     cash: INITIAL, positions: [], trades: [], history: [], scans: [],
@@ -87,7 +92,7 @@ function tradeRow(state, position, side, quote, reason, time, realized) {
   };
 }
 
-export function execute(state, { now, regularStart, regularEnd, quotes, previous, candidates, review }) {
+export function execute(state, { now, regularStart, regularEnd, quotes, previous, candidates, review, openingExit }) {
   mark(state, quotes, now);
   const trades = [];
   if (review || now < regularStart || now >= regularEnd) return trades;
@@ -95,7 +100,7 @@ export function execute(state, { now, regularStart, regularEnd, quotes, previous
   for (const position of [...state.positions]) {
     const quote = quotes.get(position.symbol);
     if (!fresh(quote, now, regularStart)) continue;
-    const reason = sellReason(position, quote, previous?.[position.symbol]);
+    const reason = sellReason(position, quote, previous?.[position.symbol]) ?? openingExit?.(position, quote.price);
     if (!reason) continue;
     state.cash += position.quantity * quote.price;
     state.positions = state.positions.filter(item => item.symbol !== position.symbol);
@@ -109,7 +114,7 @@ export function execute(state, { now, regularStart, regularEnd, quotes, previous
     if (sold.has(candidate.symbol) || state.positions.some(position => position.symbol === candidate.symbol)) continue;
     const quote = quotes.get(candidate.symbol);
     if (!fresh(quote, now, regularStart) || !candidate.validPrice(quote.price)) continue;
-    const budget = Math.min(state.cash, Math.floor(account(state).total / LIMIT));
+    const budget = Math.min(state.cash, Math.floor(account(state).total / LIMIT * (candidate.allocation ?? 1)));
     const quantity = Math.floor(budget / quote.price);
     if (quantity < 1) continue;
     const position = { symbol: candidate.symbol, name: candidate.name, type: candidate.type,
