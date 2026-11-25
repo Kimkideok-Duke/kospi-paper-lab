@@ -30,7 +30,7 @@ test("portfolio caps holdings, accounts for gross amounts, and never trades on s
   const quotes = new Map(candidates.map(({ symbol }) => [symbol, { price: 10000, time }]));
   assert.deepEqual(execute(state, { now: time + 91000, regularStart: start, regularEnd: end, quotes, candidates }), []);
   assert.equal(execute(state, { now: time, regularStart: start, regularEnd: end, quotes, candidates, review: true }).length, 0);
-  assert.equal(execute(state, { now: time, regularStart: start, regularEnd: end, quotes, candidates }).length, 5);
+  assert.equal(execute(state, { now: time, regularStart: start, regularEnd: end, quotes, candidates }).length, 1);
   assert.equal(state.positions[0].type, "ETF");
   assert.equal(account(state).cash, 0);
   assert.equal(account(state).total, INITIAL);
@@ -39,13 +39,13 @@ test("portfolio caps holdings, accounts for gross amounts, and never trades on s
   const sells = execute(state, { now: next, regularStart: start, regularEnd: end,
     quotes: new Map([["0", { price: 10800, time: next }]]), candidates });
   assert.equal(sells.length, 1);
-  assert.equal(sells[0].realized, 160000);
-  assert.equal(sells[0].amount, 2160000);
-  assert.equal(sells[0].total, 10160000);
-  assert.equal(sells[0].totalPnl, 160000);
+  assert.equal(sells[0].realized, 800000);
+  assert.equal(sells[0].amount, 10800000);
+  assert.equal(sells[0].total, 10800000);
+  assert.equal(sells[0].totalPnl, 800000);
 });
 
-test("opening news reduces ETF entry and an off-schedule manual run shares the same ledger", async t => {
+test("opening news informs ETF entry without reducing allocation and an off-schedule manual run shares the same ledger", async t => {
   const monday = "2026-11-30";
   const mondayAt = clock => at(clock, monday);
   const previousClose = at("15:30", "2026-11-27");
@@ -95,7 +95,7 @@ test("opening news reduces ETF entry and an off-schedule manual run shares the s
     if (route === "candles") return result({ candles: Array.from({ length: 5 }, (_, i) => ({
       timestamp: new Date(Date.now() - 60000 * i).toISOString(), closePrice: String(10000 - 20 * i), volume: "2500",
     })) });
-    if (route === "orderbook") return result({ timestamp: time(), bids: [{ price: "9995", volume: "300" }], asks: [{ price: "10005", volume: "300" }] });
+    if (route === "orderbook") return result({ currency: "KRW", timestamp: time(), bids: [{ price: String(outcome - 5), volume: "3000" }], asks: [{ price: String(outcome + 5), volume: "3000" }] });
     if (route === "price-limits") return result({ timestamp: time(), upperLimitPrice: "13000", lowerLimitPrice: "7000" });
     if (route.endsWith("/warnings")) return result([]);
     if (route === "trades") return result([{ timestamp: time(), volume: "50" }]);
@@ -123,7 +123,7 @@ test("opening news reduces ETF entry and an off-schedule manual run shares the s
   env.connectionIp = async () => "203.0.113.15";
   const selfHosted = await (await api("/api/state")).json();
   assert.equal(selfHosted.batchEnabled, true);
-  assert.equal(selfHosted.next, mondayAt("10:00"));
+  assert.equal(selfHosted.next, mondayAt("09:10"));
   assert.equal(selfHosted.canCheckIp, true);
   assert.equal((await api("/api/connection-ip", undefined, false)).status, 401);
   const ipResponse = await api("/api/connection-ip");
@@ -137,8 +137,10 @@ test("opening news reduces ETF entry and an off-schedule manual run shares the s
   const first = await runSlot(env);
   assert.equal(first.status, "ok");
   assert.equal(first.trades.length, 1);
-  assert.equal(first.trades[0].amount, 1300000);
-  assert.match(first.trades[0].reason, /미국 뉴스.*주문 규모 축소/);
+  assert.equal(first.trades[0].amount, 3001500);
+  assert.equal(first.trades[0].costs.commission, 451);
+  assert.ok(first.trades[0].strategyVersion);
+  assert.match(first.trades[0].reason, /미국 뉴스/);
   assert.equal(first.trades[0].realized, 0);
   assert.equal(first.news.from, previousClose);
   assert.equal(first.news.until, mondayAt("09:00"));
@@ -163,13 +165,13 @@ test("opening news reduces ETF entry and an off-schedule manual run shares the s
   assert.equal(sale.status, "ok");
   assert.equal(sale.trades.length, 1);
   assert.equal(sale.trades[0].source, "manual");
-  assert.equal(sale.trades[0].realized, 78000);
+  assert.equal(sale.trades[0].realized, 176072);
   assert.deepEqual((await (await api("/api/manual-run", manual)).json()).trades, sale.trades);
   assert.equal(newsRequests, first.news.feedCount);
   const saved = await (await api("/api/state")).json();
   assert.equal(saved.trades.length, 2);
   assert.equal(saved.positions.length, 0);
-  assert.equal(saved.totals.total, 10078000);
+  assert.equal(saved.totals.total, 10176072);
   assert.equal(saved.history.length, 2);
   assert.deepEqual(saved.openingNews, first.news);
   assert.deepEqual(saved.scans[0].news, first.news);

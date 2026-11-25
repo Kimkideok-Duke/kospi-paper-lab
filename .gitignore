@@ -44,3 +44,10 @@ yarn-error.log*
 # OS metadata
 .DS_Store
 /.marketlab/
+
+# Private runtime data must never enter published source
+*.sqlite
+*.sqlite-*
+**/owner-login.txt
+**/login.txt
+**/key

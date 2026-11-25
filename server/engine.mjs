@@ -1,3 +1,4 @@
+import { executePaper } from "./paper-model.mjs";
 export const INITIAL = 10_000_000;
 export const LIMIT = 5;
 export const START = "2026-11-25";
@@ -11,14 +12,16 @@ function campaignSlot(now) {
   const local = kst(now);
   const date = local.slice(0, 10);
   const hour = Number(local.slice(11, 13));
+  const minute = Math.floor(Number(local.slice(14, 16)) / 10) * 10;
   if (date < START || date >= END || hour < 9 || hour > 16) return null;
   if ([0, 6].includes(new Date(date).getUTCDay())) return null;
-  return { date, hour, id: local.slice(0, 13) };
+  if (hour === 16 && minute !== 0) return null;
+  return { date, hour, minute, id: local.slice(0, 13) + ":" + String(minute).padStart(2, "0") };
 }
 
 export function slotFor(now) {
   const slot = campaignSlot(now);
-  if (!slot || Math.floor(now % 3600_000 / 60_000) >= 15) return null;
+  if (!slot || now >= slotTime(slot) + 3 * 60_000) return null;
   return { ...slot, review: slot.hour === 16 };
 }
 
@@ -29,8 +32,8 @@ export function manualSlotFor(now, requestId) {
 }
 
 export function slotTime(slot) {
-  const minute = slot.hour === 9 ? "03" : "00";
-  return Date.parse(slot.id + ":" + minute + ":00+09:00");
+  const minute = slot.hour === 9 && (slot.minute ?? 0) === 0 ? 3 : slot.minute ?? 0;
+  return Date.parse(slot.id.slice(0, 13) + ":" + String(minute).padStart(2, "0") + ":00+09:00");
 }
 
 export function initialState() {
@@ -42,7 +45,7 @@ export function initialState() {
 
 export function account(state) {
   const marketValue = state.positions.reduce((sum, p) => sum + p.price * p.quantity, 0);
-  const cost = state.positions.reduce((sum, p) => sum + p.entry * p.quantity, 0);
+  const cost = state.positions.reduce((sum, p) => sum + (p.costKrw ?? p.entry * p.quantity), 0);
   const total = state.cash + marketValue;
   return { cash: state.cash, marketValue, total, pnl: total - INITIAL, openPnl: marketValue - cost,
     realized: total - INITIAL - (marketValue - cost) };
@@ -104,7 +107,9 @@ function tradeRow(state, position, side, quote, reason, time, realized, manual) 
   };
 }
 
-export function execute(state, { now, regularStart, regularEnd, quotes, previous, candidates, review, openingExit, manual }) {
+export function execute(state, { now, regularStart, regularEnd, quotes, previous, candidates, review, openingExit, manual, books, monitor }) {
+  if (state.paperModel?.enabled) return executePaper(state, { market: "KR", now, regularStart, regularEnd, quotes, previous,
+    candidates, review, openingExit, manual, books, monitor, reasonFor: sellReason });
   mark(state, quotes, now);
   const trades = [];
   if (review || now < regularStart || now >= regularEnd) return trades;
@@ -126,7 +131,7 @@ export function execute(state, { now, regularStart, regularEnd, quotes, previous
     if (sold.has(candidate.symbol) || state.positions.some(position => position.symbol === candidate.symbol)) continue;
     const quote = quotes.get(candidate.symbol);
     if (!fresh(quote, now, regularStart) || !candidate.validPrice(quote.price)) continue;
-    const budget = Math.min(state.cash, Math.floor(account(state).total / LIMIT * (candidate.allocation ?? 1)));
+    const budget = state.cash;
     const quantity = Math.floor(budget / quote.price);
     if (quantity < 1) continue;
     const position = { symbol: candidate.symbol, name: candidate.name, type: candidate.type,

@@ -1,33 +1,34 @@
 import { account, execute, fresh, kst, marketPhase, percentage, quoteMap, rate, weight } from "./engine.mjs";
 import { collectOpeningNews, openingExitReason, openingSignal } from "./us-news.mjs";
+import { recordAnalytics } from "./paper-analytics.mjs";
+import { markPaper } from "./paper-model.mjs";
+import { marketTransport, MarketTransportError } from "./market-transport.mjs";
 
-const ORIGIN = "https://openapi.tossinvest.com";
 const MARKET = "/api/v1/";
 const nearby = (time, now, age) => Number.isFinite(time) && time <= now + 3000 && now - time <= age;
 const safeNumber = value => value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
 
 export class TossError extends Error {
-  constructor(status, auth) {
+  constructor(status, auth, context = {}) {
     const details = {
       400: "토스증권이 요청을 거절했습니다. API 설정을 확인해 주세요.",
       401: auth ? "Client ID 또는 Client Secret을 확인해 주세요." : "토스증권 액세스 토큰 인증에 실패했습니다.",
       403: "토스증권이 이 서버의 접근을 거절했습니다. API 권한과 허용 IP를 확인해 주세요.",
-      429: "토스증권 API 호출 한도에 도달했습니다.",
+      429: "토스증권 " + (context.group === "STOCK_ALL" ? "종목 목록 " : "") + "조회 한도로 잠시 대기 중입니다.",
     };
     super(details[status] ?? "토스증권 시세를 가져오지 못했습니다.");
     this.status = status;
+    this.group = context.group ?? null; this.endpoint = context.endpoint ?? null; this.retryAfter = context.retryAfter ?? null;
   }
 }
 
 async function tossFetch(path, options) {
-  let response;
   try {
-    response = await fetch(new URL(path, ORIGIN), { ...options, redirect: "error", signal: AbortSignal.timeout(6500) });
-  } catch {
-    throw new Error("토스증권 API에 연결할 수 없습니다.");
+    return await marketTransport.request(path, options);
+  } catch (error) {
+    if (error instanceof MarketTransportError) throw new TossError(error.status, path === "/oauth2/token", error);
+    throw error;
   }
-  if (!response.ok) throw new TossError(response.status, path === "/oauth2/token");
-  return response.json();
 }
 
 export async function issue({ id, secret }) {
@@ -39,7 +40,7 @@ export async function issue({ id, secret }) {
   return { value: token.access_token, expires: Date.now() + Number(token.expires_in) * 1000 };
 }
 
-export function marketClient(token) {
+export function marketClient(token, options = {}) {
   let requests = 0;
   const missing = new Set();
   async function get(path, params = {}, optional = false) {
@@ -153,10 +154,10 @@ async function assess(client, stock, slot, phaseStart, context) {
     "최근 분봉 " + percentage(candles.momentum),
     "호가 간격 " + spread.toFixed(2) + "%",
     institutional ? (institutional > 0 ? "외국인·기관 순매수" : "외국인·기관 순매도") + " " + Math.abs(institutional).toLocaleString("ko-KR") + "주" : null,
-    stock.news.reason ? stock.news.reason + (stock.news.caution ? " 반영 · 주문 규모 축소" : " 반영") : null,
+    stock.news.reason ? stock.news.reason + " 반영" : null,
   ].filter(Boolean).join(" · ");
   return {
-    ...stock, reason, allocation: stock.news.caution ? 0.65 : 1,
+    ...stock, reason,
     score: stock.score + weight(candles.momentum, 0, 3) - spread
       + Math.sign(institutional ?? 0) * 0.2 + Math.sign(programNet ?? 0) * 0.1,
     validPrice: price => price > lower && price < upper && Math.abs(rate(price, stock.q.price)) <= 0.8,
@@ -184,7 +185,8 @@ export async function scan(state, slot, client, now) {
     state.universe = { date: slot.date, stocks };
   }
   const universe = state.universe.stocks;
-  const symbols = [...new Set([...universe.map(stock => stock.symbol), ...state.positions.map(p => p.symbol)])];
+  const symbols = [...new Set([...universe.map(stock => stock.symbol), ...state.positions.map(p => p.symbol),
+    ...(state.paperOrders ?? []).filter(o => ["PENDING", "PARTIAL_FILLED"].includes(o.status)).map(o => o.symbol), "069500"])];
   const morningCutoff = Date.parse(slot.date + "T09:00:00+09:00");
   const priorNews = slot.hour === 9 ? state.scans.findLast(item => item.news?.until === morningCutoff
     && item.news.sources?.length >= 2)?.news : null;
@@ -209,8 +211,8 @@ export async function scan(state, slot, client, now) {
   const context = { ranked, indexChange, news };
   const flow = flows?.records?.[0];
   const net = flow?.foreigner ? Number(flow.foreigner.buyAmount) - Number(flow.foreigner.sellAmount) : null;
-  const priorHours = slot.manual ? [slot.hour, slot.hour - 1] : [slot.hour - 1];
-  const prior = state.previous?.date === slot.date && priorHours.includes(state.previous.hour) ? state.previous.prices : null;
+  const prior = state.previous?.date === slot.date && Number.isFinite(state.previous.time)
+    && now - state.previous.time >= 0 && now - state.previous.time <= 13 * 60_000 ? state.previous.prices : null;
   const current = Date.now();
   const eligible = phase === "trade" ? shortlist(universe, quotes, prior, context, current, regularStart,
     new Set(state.positions.map(p => p.symbol)), Math.floor(account(state).total / 5)) : [];
@@ -223,22 +225,27 @@ export async function scan(state, slot, client, now) {
   }
   candidates.sort((a, b) => b.score - a.score);
 
+  const books = new Map();
   if (phase === "trade") {
-    const interested = [...new Set([...state.positions.map(p => p.symbol), ...candidates.map(c => c.symbol)])];
+    const interested = [...new Set([...state.positions.map(p => p.symbol), ...candidates.map(c => c.symbol),
+      ...(state.paperOrders ?? []).filter(o => ["PENDING", "PARTIAL_FILLED"].includes(o.status)).map(o => o.symbol)])];
     if (interested.length) {
       const fillQuotes = await loadPrices(client, interested);
       for (const symbol of interested) quotes.delete(symbol);
       for (const [symbol, quote] of fillQuotes) quotes.set(symbol, quote);
+      if (state.paperModel?.enabled) for (const symbol of interested) books.set(symbol, await client.get("orderbook", { symbol }));
     }
   }
 
   const finish = Date.now();
+  if (state.paperModel?.enabled) markPaper(state, "KR", quotes, null, finish);
+  const baselineEquity = account(state).total;
   const trades = execute(state, { now: finish, regularStart, regularEnd, quotes, previous: prior, candidates,
-    review: phase === "review", manual: slot.manual,
+    review: phase === "review", manual: slot.manual, books,
     openingExit: news ? (position, price) => openingExitReason(news, position, price, ranked.get(position.symbol)?.price?.basePrice) : null });
   const freshQuotes = [...quotes.entries()].filter(([, q]) => fresh(q, finish, regularStart));
   if (phase === "trade" && !slot.manual) {
-    state.previous = { date: slot.date, hour: slot.hour,
+    state.previous = { date: slot.date, hour: slot.hour, time: now,
       prices: Object.fromEntries(freshQuotes.map(([symbol, quote]) => [symbol, quote.price])) };
   }
   const totals = account(state);
@@ -251,6 +258,10 @@ export async function scan(state, slot, client, now) {
     currency: safeNumber(currency?.midRate), currencyAt: Date.parse(currency?.validFrom) || null,
     foreignNet: Number.isFinite(net) ? net : null, flowDate: flow?.date ?? null, missing: [...client.missing],
   };
+  if (state.paperModel?.enabled) recordAnalytics(state, "KR", finish, [
+    ...(quotes.has("069500") ? [{ symbol: "069500", name: "KODEX 200", price: quotes.get("069500").price, time: quotes.get("069500").time, fx: 1 }] : []),
+    ...(index ? [{ symbol: "KOSPI", name: "코스피", price: Number(index.lastPrice), time: Date.parse(index.timestamp), fx: 1 }] : []),
+  ], baselineEquity);
   const message = phase === "review" ? "16시 모의 계좌 평가를 기록했습니다."
     : finish >= regularEnd ? "분석 중 연속매매 시간이 끝나 모의 주문을 건너뛰었습니다."
     : trades.length ? trades.length + "건의 모의 거래를 기록했습니다."

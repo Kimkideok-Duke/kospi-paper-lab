@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="토스증권 시세를 기준으로 코스피와 ETF를 모의투자하고 거래 근거와 손익을 기록합니다.">
   <meta name="theme-color" content="#f6f7fc">
-  <title>마켓랩 | 코스피 모의투자</title>
+  <title>마켓랩 | 국내·미국장 모의투자</title>
   <link rel="icon" href="/mark.svg">
-  <link rel="stylesheet" href="/app.css?v=20261125-manual">
-  <script type="module" src="/app.js?v=20261125-manual"></script>
+  <link rel="stylesheet" href="/app.css?v=20261126-accounts">
+  <script type="module" src="/app.js?v=20261126-accounts"></script>
 </head>
 <body>
   <header class="topbar">
@@ -19,12 +19,17 @@
         <a href="/trades" data-page data-icon="list">거래내역</a>
         <a href="/settings" data-page data-icon="settings">설정</a>
       </nav>
-      <div class="nav-end"><span id="connection" class="pill"><i></i> 연결 확인 중</span></div>
+      <div class="nav-end"><a href="/account" class="text-link">내 계정</a><span id="connection" class="pill"><i></i> 연결 확인 중</span></div>
     </div>
   </header>
   <main class="frame">
+    <nav class="market-tabs" aria-label="모의투자 시장">
+      <a href="/" data-page data-market="KR">국내장 <span>코스피 · ETF</span></a>
+      <a href="/us" data-page data-market="US">미국장 <span>NASDAQ · NYSE · AMEX</span></a>
+    </nav>
+    <div id="us-session" class="market-session" hidden></div>
     <section class="intro">
-      <div><div class="scope"><span data-icon="globe"></span> 코스피 · ETF</div>
+      <div><div class="scope"><span data-icon="globe"></span><span id="market-scope">코스피 · ETF</span></div>
         <h1 id="title">모의투자 대시보드</h1><p id="subtitle">토스증권 시세로 진행하는 한 달간의 자동 모의투자입니다.</p>
       </div>
       <div class="intro-actions" id="dashboard-actions">
@@ -34,6 +39,7 @@
       </div>
     </section>
     <div id="notice" class="notice" hidden role="status"></div><div id="live-announcement" class="live-announcement" role="status" aria-live="polite"></div>
+    <div class="monitor-strip"><span id="server-health">서버 상태 확인 중</span><span id="monitor-health">보유 종목 감시 확인 중</span><button type="button" class="text-link" id="enable-notifications">브라우저 알림 켜기</button></div>
     <section id="dashboard" class="view" aria-label="대시보드">
       <div id="manual-result" class="notice manual-result" hidden>
         <p id="manual-message" role="status" aria-live="polite"></p>
@@ -81,21 +87,36 @@
             <div><dt>최근 분석</dt><dd id="last-run">대기 중</dd></div>
             <div><dt>다음 분석</dt><dd id="next-run">연결 후 시작</dd></div>
             <div><dt>조사 종목</dt><dd id="coverage">—</dd></div>
-            <div><dt>코스피 지수</dt><dd id="kospi">—</dd></div>
+            <div><dt id="benchmark-label">코스피 지수</dt><dd id="kospi">—</dd></div>
           </dl>
           <div class="activity-callout" id="activity-callout"><span data-icon="info"></span><span id="activity-text">서버 배치 상태를 확인 중입니다.</span></div>
         </article>
       </div>
 
-      <article class="card data-card news-card">
-        <div class="card-heading"><div><h2>09시 미국 뉴스</h2><p>직전 국내 거래일 장 마감 이후부터 오전 9시까지</p></div><span class="metric-icon blue" data-icon="globe"></span></div>
-        <div id="opening-news"></div>
-      </article>
 
       <article class="card data-card holdings">
         <div class="card-heading"><div><h2>보유 종목</h2><p id="holdings-note">현재가 기준 평가손익</p></div><span id="active-count" class="plain-badge">0 / 5</span></div>
         <div id="holdings-list"></div>
       </article>
+
+      <article class="card data-card news-card">
+        <div class="card-heading"><div><h2 id="news-title">09시 미국 뉴스</h2><p id="news-window">직전 국내 거래일 장 마감 이후부터 오전 9시까지</p></div><span class="metric-icon blue" data-icon="globe"></span></div>
+        <div id="opening-news"></div>
+      </article>
+
+      <article class="card data-card">
+        <div class="card-heading"><div><h2>수익과 위험</h2><p>비용 반영 손익 · 매도 체결 기준 통계 · 관측 평가금액 기준 낙폭</p></div><span id="strategy-version" class="plain-badge">버전 확인 중</span></div>
+        <div id="risk-stats" class="stat-grid"></div><div id="cost-summary" class="cost-summary"></div>
+        <div id="fx-attribution" class="cost-summary" hidden></div>
+      </article>
+      <article class="card data-card">
+        <div class="card-heading"><div><h2>시장 대비 성과</h2><p>각 기준의 측정 시작 이후 같은 기간 비교 · 배당·벤치마크 비용 제외</p></div></div>
+        <div class="plot benchmark-plot"><canvas id="benchmark-chart" role="img" aria-label="전략과 기준 지수 수익률 비교 그래프"></canvas></div>
+        <div id="benchmark-table"></div>
+      </article>
+      <article class="card data-card"><div class="card-heading"><div><h2>일별 성과와 전략 변경</h2><p>과거 체결은 유지하고, 새 버전의 비용과 체결 규칙은 이후 주문에 적용합니다.</p></div></div><div id="daily-table"></div><div id="version-table"></div></article>
+      <article class="card data-card"><div class="card-heading"><div><h2>운영 알림</h2><p>분석 누락 · API 오류 · 시세·호가 지연 · 보유 감시 체결</p></div></div><div id="alerts-list" aria-live="polite"></div></article>
+
 
       <article class="card data-card recent">
         <div class="card-heading"><div><h2>최근 거래</h2><p>종목별 체결 내역과 매매 근거</p></div><a class="button secondary" data-page href="/trades">전체 내역</a></div>
@@ -114,6 +135,9 @@
           </div>
         </div>
         <div id="trade-list"></div>
+      </article>
+      <article class="card data-card">
+        <div class="card-heading"><div><h2>모의 주문 상태</h2><p>호가 잔량에 따라 미체결·부분 체결·만료를 구분합니다.</p></div></div><div id="paper-orders"></div>
       </article>
       <article class="card data-card">
         <div class="card-heading"><div><h2>시간별 분석 기록</h2><p>체결이 없었던 시간의 분석 결과도 확인할 수 있습니다.</p></div></div>
@@ -156,20 +180,33 @@
           </form>
         </article>
         <article class="card data-card settings-card">
-          <div class="card-heading"><div><h2>모의투자 조건</h2><p>2026.11.25 — 2026.12.24 · 한국 시간</p></div><span class="metric-icon purple" data-icon="settings"></span></div>
+          <div class="card-heading"><div><h2>모의투자 조건</h2><p id="conditions-period">2026.11.25 — 2026.12.24 · 한국 시간</p></div><span class="metric-icon purple" data-icon="settings"></span></div>
           <dl class="activity-rows">
             <div><dt>시작 원금</dt><dd>10,000,000원</dd></div>
-            <div><dt>대상</dt><dd>토스증권 코스피·ETF</dd></div>
+            <div><dt>대상</dt><dd id="conditions-universe">토스증권 코스피·ETF</dd></div>
             <div><dt>동시 보유 한도</dt><dd>5종목</dd></div>
-            <div><dt>분석 시간</dt><dd>09:00–16:00 매 정시</dd></div>
-            <div><dt>증권거래세 · 수수료</dt><dd>0원</dd></div>
+            <div><dt>분석 시간</dt><dd id="conditions-schedule">09:03 첫 분석 · 이후 10분 간격</dd></div>
+            <div><dt>증권거래세 · 수수료</dt><dd id="conditions-costs">모의 비용 설정 적용</dd></div>
           </dl>
-          <p class="rules">09시 회차는 오전 9시까지 나온 미국 뉴스와 개장 초 시세를 반영해 09:03부터 평가합니다. 정규장 연속매매 시간에는 최신 체결가로 모의 매매를 실행합니다. 16시에는 계좌를 평가합니다. 신규 매수 1종목에는 평가자산의 최대 20%를 사용하며, −2.5% 손절과 +5% 익절, 단기 추세 약화를 매도 기준으로 사용합니다.</p>
+          <p class="rules" id="conditions-rules">09시 회차는 오전 9시까지 나온 미국 뉴스와 개장 초 시세를 반영해 09:03부터 평가합니다. 정규장 연속매매 시간에는 최신 체결가로 모의 매매를 실행합니다. 16시에는 계좌를 평가합니다. 신규 매수에는 종목별 비중 상한 없이 가용 현금을 사용하며, −2.5% 손절과 +5% 익절, 단기 추세 약화를 매도 기준으로 사용합니다.</p>
         </article>
       </div>
+      <article class="card data-card settings-card">
+        <div class="card-heading"><div><h2>모의 비용·체결 설정</h2><p>현재 선택 시장에 적용합니다. 실제 계좌의 우대 수수료·세금과 차이가 있을 수 있습니다.</p></div></div>
+        <form id="model-form" class="model-form">
+          <label>매매 수수료 (%)<input name="commissionBps" type="number" min="0" max="1" step="0.001" required></label>
+          <label>주식 매도 거래세 (%) · ETF 제외<input name="taxBps" type="number" min="0" max="1" step="0.001" required></label>
+          <label>환전 스프레드 (%) · 미국장<input name="fxSpreadBps" type="number" min="0" max="2" step="0.001" required></label>
+          <label>호가 잔량 사용 비율 (%)<input name="participationPct" type="number" min="1" max="100" step="1" required></label>
+          <label>기준가 대비 허용 체결 범위 (%)<input name="limitBps" type="number" min="0.01" max="1" step="0.01" required></label>
+          <label>미체결 주문 유효 시간 (초)<input name="ttlSeconds" type="number" min="60" max="900" step="1" required></label>
+          <button class="button primary" type="submit">이후 모의 주문에 적용</button><p id="model-result" role="status"></p>
+        </form>
+        <p class="rules">기본 모의 수수료는 국내 0.015%, 미국 0.1%이며 주식 매도 거래세는 국내 0.2%, ETF는 0%입니다. 미국 환전 스프레드 0.1%는 조정 가능한 가정입니다. 소액 수수료 면제·우대·미국 제비용·ETF 보유기간 과세·배당세는 제외합니다. 미국 양도세는 이 계좌의 연간 실현손익에 한해 별도 추정하며 현금에서 차감하지 않습니다. 설정을 바꾸면 대기 주문을 취소하고 새 전략 버전을 기록합니다.</p>
+      </article>
     </section>
 
-    <footer class="footer"><div class="foot-brand"><span data-icon="brand"></span>마켓랩</div><span>토스증권 Open API · 코스피 · ETF · 모의투자</span><span>원화(KRW) · 한국 시간(KST)</span></footer>
+    <footer class="footer"><div class="foot-brand"><span data-icon="brand"></span>마켓랩</div><span id="market-footer">토스증권 Open API · 코스피 · ETF · 모의투자</span><span>원화(KRW) · 한국 시간(KST)</span></footer>
   </main>
 </body>
 </html>

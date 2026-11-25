@@ -1,6 +1,11 @@
-import { INITIAL, LIMIT, START, END, account, initialState, kst, manualSlotFor, slotFor, slotTime } from "./engine.mjs";
+import { INITIAL, LIMIT, START, END, account, initialState, kst, manualSlotFor, slotFor, slotTime, execute } from "./engine.mjs";
 import { issue, loadPrices, marketClient, scan, TossError } from "./toss.mjs";
 import { assets } from "./assets.mjs";
+import { initialUsState, usAccount, usDate, usSlotFor, nextUsSlot, validFx, executeUs, usSlots } from "./us-engine.mjs";
+import { loadUsPrices, scanUs } from "./us-paper.mjs";
+import { upgradePaper, alertPaper, setPaperConfig, activeOrder, markPaper } from "./paper-model.mjs";
+import { analyticsView, recordAnalytics } from "./paper-analytics.mjs";
+import { marketTransport } from "./market-transport.mjs";
 
 const encode = new TextEncoder();
 const decode = new TextDecoder();
@@ -71,7 +76,7 @@ async function locked(env, work) {
     if (!result.meta.changes) throw new RequestError(409, "요청 처리 시간이 초과되었습니다. 다음 실행에서 다시 확인합니다.");
   };
   try {
-    return await work(await record(env), write);
+    return await work(await record(env), write, owner);
   } finally {
     await env.DB.prepare("UPDATE campaign SET lock_owner=NULL,lock_until=0 WHERE id=1 AND lock_owner=?").bind(owner).run();
   }
@@ -99,7 +104,8 @@ async function runMarketCheck(env, slot) {
   if (!(await record(env))?.secrets) return { status: "waiting", message: "토스증권 API 연결을 기다리고 있습니다.", trades: [] };
   return locked(env, async (row, write) => {
     const state = JSON.parse(row.state);
-    const previous = state.scans.find(item => item.id === slot.id && item.status !== "error");
+    upgradePaper(state, "KR", Date.now());
+    const previous = state.scans.find(item => (item.id === slot.id || (!slot.manual && slot.minute === 0 && item.id === slot.id.slice(0, -3))) && item.status !== "error");
     if (previous && slot.manual) {
       const tradeIds = new Set(previous.tradeIds ?? []);
       return { status: previous.status, message: previous.message, trades: state.trades.filter(trade => tradeIds.has(trade.id)) };
@@ -122,12 +128,13 @@ async function runMarketCheck(env, slot) {
       let result;
       const draft = structuredClone(state);
       try {
-        result = await scan(draft, slot, marketClient(await getToken()), Date.now());
+        result = await scan(draft, slot, marketClient(await getToken(), { paced: true }), Date.now());
       } catch (error) {
         if (error.status !== 401) throw error;
-        result = await scan(draft, slot, marketClient(await getToken(true)), Date.now());
+        result = await scan(draft, slot, marketClient(await getToken(true), { paced: true }), Date.now());
       }
       draft.lastError = null;
+      draft.operations.lastAnalysis = Date.now();
       draft.scans = draft.scans.filter(item => item.id !== slot.id);
       draft.scans.push({ id: slot.id, time: Date.now(), status: result.status,
         message: result.message, tradeCount: result.trades?.length ?? 0,
@@ -137,7 +144,8 @@ async function runMarketCheck(env, slot) {
       return { ...result, trades: result.trades ?? [] };
     } catch (error) {
       const message = error.message || "시장 분석을 마치지 못했습니다.";
-      state.lastError = { time: Date.now(), message };
+      alertPaper(state, "analysis-error", message, Date.now(), "error");
+      state.lastError = { time: Date.now(), message, ...(error.group ? { group: error.group, endpoint: error.endpoint, retryAfter: error.retryAfter } : {}) };
       state.scans = state.scans.filter(item => item.id !== slot.id);
       state.scans.push({ id: slot.id, time: Date.now(), status: "error", message, tradeCount: 0,
         ...(slot.manual ? { source: "manual" } : {}) });
@@ -149,13 +157,230 @@ async function runMarketCheck(env, slot) {
 
 function nextSlot(now) {
   const minimum = Date.parse(START + "T09:00:00+09:00");
-  let attempt = Math.max(Math.floor(now / 3600_000) * 3600_000, minimum);
+  let attempt = Math.max(Math.floor(now / 600_000) * 600_000, minimum);
   while (kst(attempt).slice(0, 10) < END) {
     const slot = slotFor(attempt);
     if (slot && slotTime(slot) > now) return slotTime(slot);
-    attempt += 3600_000;
+    attempt += 600_000;
   }
   return null;
+}
+
+async function usRecord(env) {
+  return env.DB.prepare("SELECT * FROM us_campaign WHERE id=1").first();
+}
+
+async function runUsSlot(env, now = Date.now(), requestId = null) {
+  if (usDate(now) < START || usDate(now) >= END) return { status: "outside", message: "미국장 모의투자 기간이 아닙니다.", trades: [] };
+  if (!(await record(env))?.secrets) return { status: "waiting", message: "공유 토스증권 API 연결을 기다리고 있습니다.", trades: [] };
+  return locked(env, async (credentials, writeCredentials, owner) => {
+    const domestic = JSON.parse(credentials.state);
+    const row = await usRecord(env);
+    const state = row ? JSON.parse(row.state) : initialUsState();
+    upgradePaper(state, "US", Date.now());
+    let tokenPayload = credentials.access_token;
+    const writeUs = async value => {
+      await env.DB.prepare("INSERT OR IGNORE INTO us_campaign(id,state) VALUES(1,?)").bind(JSON.stringify(initialUsState())).run();
+      const result = await env.DB.prepare("UPDATE us_campaign SET state=? WHERE id=1 AND EXISTS (SELECT 1 FROM campaign WHERE id=1 AND lock_owner=? AND lock_until>?)")
+        .bind(JSON.stringify(value), owner, Date.now()).run();
+      if (!result.meta.changes) throw new RequestError(409, "미국장 분석 시간이 초과되어 저장하지 않았습니다.");
+    };
+    const getToken = async (force = false) => {
+      let token = !force && tokenPayload ? await openSecret(env, tokenPayload, "toss:token") : null;
+      if (!token || token.expires - Date.now() <= 60_000) {
+        token = await issue(await openSecret(env, credentials.secrets, "toss:keys"));
+        tokenPayload = await seal(env, token, "toss:token");
+        await writeCredentials(domestic, credentials.secrets, tokenPayload, false);
+      }
+      return token.value;
+    };
+    let slot;
+    try {
+      if (state.calendar?.date !== usDate(now)) {
+        let calendar;
+        try { calendar = await marketClient(await getToken()).get("market-calendar/US", { date: usDate(now) }); }
+        catch (error) {
+          if (error.status !== 401) throw error;
+          calendar = await marketClient(await getToken(true)).get("market-calendar/US", { date: usDate(now) });
+        }
+        if (calendar?.today?.date !== usDate(now)) throw new Error("미국 현지 거래일의 장 운영 일정을 확인하지 못했습니다.");
+        state.calendar = { date: usDate(now), result: calendar };
+        state.lastError = null;
+        await writeUs(state);
+      }
+      const calendar = state.calendar.result;
+      slot = usSlotFor(calendar, now, requestId);
+      if (!slot) return { status: "outside", message: "미국 정규장 분석 구간이 아닙니다.", trades: [] };
+      const previous = state.scans.find(log => log.id === slot.id && log.status !== "error");
+      if (previous) {
+        const ids = new Set(previous.tradeIds ?? []);
+        return requestId ? { status: previous.status, message: previous.message, trades: state.trades.filter(trade => ids.has(trade.id)) }
+          : { status: "duplicate", message: "이 미국장 회차는 이미 기록되었습니다.", trades: [] };
+      }
+      let draft = structuredClone(state), result;
+      try {
+        result = await scanUs(draft, slot, marketClient(await getToken(), { paced: true }), calendar);
+      } catch (error) {
+        if (error.status !== 401) throw error;
+        // Discard a partially mutated scan before retrying with a refreshed shared token.
+        draft = structuredClone(state);
+        result = await scanUs(draft, slot, marketClient(await getToken(true), { paced: true }), calendar);
+      }
+      draft.lastError = null;
+      draft.operations.lastAnalysis = Date.now();
+      draft.scans = draft.scans.filter(log => log.id !== slot.id);
+      draft.scans.push({ id: slot.id, time: Date.now(), status: result.status, message: result.message,
+        tradeCount: result.trades?.length ?? 0, ...(slot.manual ? { source: "manual", tradeIds: result.trades?.map(t => t.id) ?? [] } : {}),
+        ...(result.news ? { news: result.news } : {}) });
+      await writeUs(draft);
+      await writeCredentials(domestic, credentials.secrets, tokenPayload);
+      return { ...result, trades: result.trades ?? [] };
+    } catch (error) {
+      const message = error.message || "미국장 분석을 마치지 못했습니다.";
+      alertPaper(state, "analysis-error", message, Date.now(), "error");
+      const id = slot?.id ?? "us-calendar:" + usDate(now);
+      state.lastError = { time: Date.now(), message, ...(error.group ? { group: error.group, endpoint: error.endpoint, retryAfter: error.retryAfter } : {}) };
+      state.scans = state.scans.filter(log => log.id !== id);
+      state.scans.push({ id, time: Date.now(), status: "error", message, tradeCount: 0 });
+      await writeUs(state);
+      await writeCredentials(domestic, credentials.secrets, tokenPayload);
+      return { status: "error", message, trades: [] };
+    }
+  });
+}
+
+function usView(row, credentials, env) {
+  const state = row ? JSON.parse(row.state) : initialUsState();
+  const now = Date.now(), batchEnabled = env.MARKETLAB_BATCH === true;
+  return { market: "US", currency: "USD", timezone: "America/New_York", start: START, end: END,
+    now, next: batchEnabled ? nextUsSlot(state.calendar?.result, now) : null,
+    session: state.calendar?.result?.today ?? null, nextSession: state.calendar?.result?.nextBusinessDay ?? null,
+    batchEnabled, initial: INITIAL, limit: LIMIT, connected: Boolean(credentials?.secrets),
+    canCheckIp: typeof env.connectionIp === "function", finished: usDate(now) >= END,
+    totals: usAccount(state), positions: state.positions, trades: state.trades, history: state.history,
+    analytics: analyticsView(state, "US"),
+    scans: state.scans.slice(-100), openingNews: state.scans.findLast(log => log.news)?.news ?? null,
+    latest: state.latest, lastError: state.lastError, fx: state.fx,
+    fxMode: "거래 시점 매매기준율로 원화 정산", selection: "NASDAQ·NYSE·AMEX 거래대금 상위 100종목 중 주식·ETF" };
+}
+
+async function runMonitor(env, now = Date.now()) {
+  const results = [];
+  for (const market of ["KR", "US"]) {
+    try {
+      results.push(await locked(env, async (credentials, write, owner) => {
+        const usRow = market === "US" ? await usRecord(env) : null;
+        const state = market === "US" ? usRow ? JSON.parse(usRow.state) : initialUsState() : JSON.parse(credentials.state);
+        upgradePaper(state, market, now);
+        let tokenPayload = credentials.access_token;
+        const persist = async value => {
+          if (market === "US") {
+            await env.DB.prepare("INSERT OR IGNORE INTO us_campaign(id,state) VALUES(1,?)").bind(JSON.stringify(initialUsState())).run();
+            const result = await env.DB.prepare("UPDATE us_campaign SET state=? WHERE id=1 AND EXISTS (SELECT 1 FROM campaign WHERE id=1 AND lock_owner=? AND lock_until>?)")
+              .bind(JSON.stringify(value), owner, Date.now()).run();
+            if (!result.meta.changes) throw new RequestError(409, "감시 원장 저장 시간이 초과되었습니다.");
+          }
+          await write(market === "KR" ? value : JSON.parse(credentials.state), credentials.secrets, tokenPayload);
+        };
+        const draft = structuredClone(state);
+        try {
+          const date = market === "US" ? usDate(now) : kst(now).slice(0, 10);
+          draft.operations.lastMonitor = now;
+          if (!credentials.secrets || date < START || date >= END) {
+            draft.operations.status = !credentials.secrets || date < START ? "waiting" : "finished";
+            if (date >= START && date < END) recordAnalytics(draft, market, now);
+            await persist(draft); return { status: "waiting" };
+          }
+          const getToken = async (force = false) => {
+            let token = !force && tokenPayload ? await openSecret(env, tokenPayload, "toss:token") : null;
+            if (!token || token.expires - Date.now() <= 60_000) {
+              token = await issue(await openSecret(env, credentials.secrets, "toss:keys"));
+              tokenPayload = await seal(env, token, "toss:token");
+              await write(market === "KR" ? state : JSON.parse(credentials.state), credentials.secrets, tokenPayload, false);
+            }
+            return token.value;
+          };
+          let client;
+          const reads = { missing: new Set(), async get(path, params = {}) {
+            client ??= marketClient(await getToken(), { paced: true });
+            try { return await client.get(path, params); } catch (error) {
+              if (error.status !== 401) throw error;
+              client = marketClient(await getToken(true), { paced: true }); return client.get(path, params);
+            }
+          } };
+          if (draft.calendar?.date !== date) {
+            const calendar = await reads.get("market-calendar/" + market, { date });
+            if (calendar?.today?.date !== date) throw new Error("해당 거래일의 감시용 장 운영 일정을 확인하지 못했습니다.");
+            if (calendar?.today?.date !== date) throw new Error("감시용 거래소 일정을 확인하지 못했습니다.");
+            draft.calendar = { date, result: calendar };
+          }
+          const calendar = draft.calendar.result, regular = market === "US" ? calendar.today.regularMarket : calendar.today.integrated?.regularMarket;
+          const start = Date.parse(regular?.startTime), end = Date.parse(market === "US" ? regular?.endTime : regular?.singlePriceAuctionStartTime ?? regular?.endTime);
+          const open = now >= start && now < end;
+          let expected = market === "US" ? usSlots(calendar.today) : [];
+          if (market === "KR" && regular) {
+            for (let time = Math.floor(start / 600_000) * 600_000; time < Math.min(now + 1, end); time += 600_000) {
+              const slot = slotFor(time);
+              if (slot) expected.push({ ...slot, time: slotTime(slot) });
+            }
+            const closing = Date.parse(date + "T16:00:00+09:00");
+            expected.push({ id: date + "T16:00", time: closing });
+          }
+          for (const slot of expected.filter(s => s.time >= draft.paperModel.appliedAt && now >= s.time + 3 * 60_000)) {
+            if (draft.scans.some(s => s.id === slot.id && s.status !== "error")) continue;
+            const key = "missed:" + slot.id;
+            if (!draft.alerts.some(a => a.key === key)) alertPaper(draft, key, "예정된 " + (market === "US" ? "미국장" : "국내장") + " 10분 분석이 완료되지 않았습니다.", now, "error");
+          }
+          if (!open) {
+            for (const order of draft.paperOrders.filter(activeOrder)) { order.status = "EXPIRED"; order.note = "정규장 종료"; }
+            draft.operations.status = "closed"; recordAnalytics(draft, market, now); await persist(draft); return { status: "outside" };
+          }
+          const symbols = [...new Set([...draft.positions.map(p => p.symbol), ...draft.paperOrders.filter(activeOrder).map(o => o.symbol), ...(market === "US" ? ["SPY", "QQQ"] : ["069500"])])];
+          const quotes = market === "US" ? await loadUsPrices(reads, symbols) : await loadPrices(reads, symbols);
+          const fx = market === "US" ? validFx(await reads.get("exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW" }), Date.now()) : { rate: 1, from: now, until: Date.now() + 60000 };
+          const books = new Map();
+          const tradingSymbols = [...new Set([...draft.positions.map(p => p.symbol), ...draft.paperOrders.filter(activeOrder).map(o => o.symbol)])];
+          for (const symbol of tradingSymbols) {
+            books.set(symbol, await reads.get("orderbook", { symbol }));
+            const q = quotes.get(symbol);
+            if (!q || Date.now() - q.time > 90_000 || q.time < start) alertPaper(draft, "stale-quote:" + symbol, symbol + "의 최신 정규장 시세가 없어 체결을 보류했습니다.", now);
+          }
+          const finish = Date.now();
+          markPaper(draft, market, quotes, fx, finish);
+          const baselineEquity = market === "US" ? usAccount(draft).total : account(draft).total;
+          const trades = market === "US" ? executeUs(draft, { now: finish, slot: { date, regularStart: start, regularEnd: end }, quotes, fx, books, monitor: true })
+            : execute(draft, { now: finish, regularStart: start, regularEnd: end, quotes, books, candidates: [], monitor: true });
+          if (market === "US") draft.fx = fx;
+          const benchmarks = (market === "US" ? ["SPY", "QQQ"] : ["069500"]).flatMap(symbol => {
+            const q = quotes.get(symbol); return q && q.time >= start ? [{ symbol, name: symbol === "069500" ? "KODEX 200" : symbol, price: q.price, time: q.time, fx: fx.rate }] : [];
+          });
+          if (market === "KR") {
+            const index = (await reads.get("market-indicators/prices", { symbols: "KOSPI" }))?.find(row => row.symbol === "KOSPI");
+            if (index) benchmarks.push({ symbol: "KOSPI", name: "코스피", price: Number(index.lastPrice), time: Date.parse(index.timestamp), fx: 1 });
+          }
+          draft.operations.quoteFresh = tradingSymbols.every(symbol => {
+            const q = quotes.get(symbol); return q && q.time >= start && q.time <= finish + 3000 && finish - q.time <= 90000;
+          });
+          draft.operations.status = draft.operations.quoteFresh ? "monitoring" : "stale";
+          const validTimes = [...quotes.values()].filter(q => q.time >= start && q.time <= finish + 3000 && finish - q.time <= 90000).map(q => q.time);
+          if (validTimes.length) draft.operations.lastQuote = Math.max(...validTimes);
+          draft.history.push({ time: finish, total: market === "US" ? usAccount(draft).total : account(draft).total, source: "monitor" });
+          recordAnalytics(draft, market, finish, benchmarks, baselineEquity);
+          if (trades.length) {
+            draft.scans.push({ id: "monitor:" + Math.floor(now / 60000), time: finish, source: "monitor", status: "ok", tradeCount: trades.length, message: "1분 보유 감시에서 " + trades.length + "건의 모의 체결을 기록했습니다." });
+            alertPaper(draft, "protective-fill:" + Math.floor(now / 60000), "보유 종목 감시에서 " + trades.length + "건의 모의 체결이 발생했습니다.", finish, "info");
+          }
+          await persist(draft); return { status: "ok", trades };
+        } catch (error) {
+          state.operations.lastMonitor = now; state.operations.status = "error";
+          state.operations.lastError = error.message;
+          alertPaper(state, "monitor-error", "보유 감시/API 오류: " + error.message, now, "error");
+          await persist(state); return { status: "error", message: error.message };
+        }
+      }));
+    } catch (error) { if (error.status !== 409) throw error; }
+  }
+  return results;
 }
 
 function view(row, env) {
@@ -179,6 +404,7 @@ function view(row, env) {
     history: state.history, scans: state.scans.slice(-100),
     openingNews: state.scans.findLast(item => item.news)?.news ?? null,
     latest: state.latest, lastError: state.lastError,
+    analytics: analyticsView(state, "KR"),
     finished: date >= END,
   };
 }
@@ -216,6 +442,14 @@ async function handler(request, env) {
   const { pathname } = new URL(request.url);
   if (pathname.startsWith("/api/")) {
     authenticate(request);
+    if (pathname === "/api/health" && request.method === "GET") return json({ now: Date.now(), batchEnabled: env.MARKETLAB_BATCH === true, api: marketTransport.status(),
+      ...(typeof env.runtimeStatus === "function" ? env.runtimeStatus() : { startedAt: null, lastMonitorTick: null }) });
+    if (pathname === "/api/us/state" && request.method === "GET") return json(usView(await usRecord(env), await record(env), env));
+    if (pathname === "/api/us/quotes" && request.method === "GET") {
+      const paper = await usRecord(env), state = paper ? JSON.parse(paper.state) : initialUsState();
+      return json({ source: "server-monitor", quotes: Object.fromEntries(state.positions.map(p => [p.symbol,
+        { price: p.price, priceUsd: p.priceUsd, time: p.quoteTime, fxRate: p.fxRate }])) });
+    }
     if (pathname === "/api/state" && request.method === "GET") return json(view(await record(env), env));
     if (pathname === "/api/connection-ip" && request.method === "GET") {
       if (typeof env.connectionIp !== "function") throw new RequestError(404, "로컬 마켓랩에서 송신 IP를 확인해 주세요.");
@@ -227,16 +461,31 @@ async function handler(request, env) {
     }
     if (pathname === "/api/quotes" && request.method === "GET") {
       const row = await record(env);
-      const data = view(row, env);
-      if (data.finished || !row?.access_token || !data.positions.length) return json({ quotes: {} });
-      const slot = slotFor(Math.floor(Date.now() / 3600_000) * 3600_000);
-      if (!slot || slot.review) return json({ quotes: {} });
-      const token = await openSecret(env, row.access_token, "toss:token");
-      if (Date.now() >= token.expires) return json({ quotes: {} });
-      return json({ quotes: Object.fromEntries(await loadPrices(marketClient(token.value), data.positions.map(item => item.symbol))) });
+      const state = row ? JSON.parse(row.state) : initialState();
+      return json({ source: "server-monitor", quotes: Object.fromEntries(state.positions.map(p => [p.symbol, { price: p.price, time: p.quoteTime }])) });
     }
     if (request.method === "POST") {
       requireSameOrigin(request);
+      if (["/api/model", "/api/us/model"].includes(pathname)) {
+        const config = await body(request), market = pathname.includes("/us/") ? "US" : "KR";
+        return json(await locked(env, async (credentials, write, owner) => {
+          const row = market === "US" ? await usRecord(env) : credentials;
+          const state = row ? JSON.parse(row.state) : market === "US" ? initialUsState() : initialState();
+          try { setPaperConfig(state, market, Date.now(), config); } catch (error) { throw new RequestError(400, error.message); }
+          if (market === "US") {
+            await env.DB.prepare("INSERT OR IGNORE INTO us_campaign(id,state) VALUES(1,?)").bind(JSON.stringify(initialUsState())).run();
+            const saved = await env.DB.prepare("UPDATE us_campaign SET state=? WHERE id=1 AND EXISTS(SELECT 1 FROM campaign WHERE lock_owner=? AND lock_until>?)")
+              .bind(JSON.stringify(state), owner, Date.now()).run();
+            if (!saved.meta.changes) throw new RequestError(409, "설정 저장 잠금 시간이 초과되었습니다.");
+          } else await write(state, credentials.secrets, credentials.access_token);
+          return { version: state.paperModel.version, config: state.paperModel.config };
+        }));
+      }
+      if (pathname === "/api/us/manual-run") {
+        const { requestId } = (await body(request)) ?? {};
+        if (typeof requestId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestId)) throw new RequestError(400, "미국장 모의 실행 요청을 읽을 수 없습니다.");
+        return json(await runUsSlot(env, Date.now(), requestId.toLowerCase()));
+      }
       if (pathname === "/api/manual-run") {
         const { requestId } = (await body(request)) ?? {};
         if (typeof requestId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestId)) {
@@ -269,7 +518,7 @@ async function handler(request, env) {
     return new Response(content, { headers: { ...protect, "content-type": type,
       "cache-control": pathname === "/" ? "no-store" : "public, max-age=300" } });
   }
-  if (request.method === "GET" && ["/trades", "/settings"].includes(pathname)) {
+  if (request.method === "GET" && ["/trades", "/settings", "/us", "/us/trades"].includes(pathname)) {
     return new Response(assets["/"][1], { headers: { ...protect, "content-type": assets["/"][0], "cache-control": "no-store" } });
   }
   return new Response("페이지를 찾을 수 없습니다.", { status: 404, headers: protect });
@@ -285,4 +534,4 @@ export default {
     }
   },
 };
-export { runSlot };
+export { runSlot, runUsSlot, runMonitor };

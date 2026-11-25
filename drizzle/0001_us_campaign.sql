@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS us_campaign (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL
+);

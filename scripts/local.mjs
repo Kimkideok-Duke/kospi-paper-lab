@@ -6,10 +6,13 @@ import { isIPv4 } from "node:net";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createLocalHost } from "../server/local-host.mjs";
 import { startBatch } from "../server/batch.mjs";
+import { startUsBatch } from "../server/us-batch.mjs";
+import { startMonitorBatch } from "../server/monitor-batch.mjs";
 import "./build.mjs";
 
-const { default: app, runSlot } = await import("../dist/server/index.js");
+const { default: app, runSlot, runUsSlot, runMonitor } = await import("../dist/server/index.js");
 const root = process.env.MARKETLAB_DATA ?? resolve(process.env.LOCALAPPDATA ?? homedir(), "MarketLab");
 const port = Number(process.env.MARKETLAB_PORT ?? 8765);
 const origin = "http://127.0.0.1:" + port;
@@ -26,6 +29,7 @@ try {
 const db = new DatabaseSync(resolve(root, "campaign.sqlite"));
 db.exec(readFileSync(new URL("../drizzle/0000_campaign.sql", import.meta.url), "utf8")
   .replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"));
+db.exec(readFileSync(new URL("../drizzle/0001_us_campaign.sql", import.meta.url), "utf8"));
 const DB = {
   prepare(sql) {
     const statement = db.prepare(sql);
@@ -46,7 +50,11 @@ async function connectionIp() {
   return ip;
 }
 
-const env = { DB, MARKETLAB_KEY: readFileSync(keyFile, "utf8"), MARKETLAB_BATCH: withSchedule, connectionIp };
+const runtime = { startedAt: Date.now(), lastMonitorTick: null };
+const env = { DB, MARKETLAB_KEY: readFileSync(keyFile, "utf8"), MARKETLAB_BATCH: withSchedule, connectionIp, runtimeStatus: () => ({ ...runtime }) };
+
+const host = createLocalHost({ root, masterKey: readFileSync(keyFile, "utf8"), baseEnv: env, app });
+await host.initialize();
 
 const server = createServer(async (req, res) => {
   try {
@@ -55,7 +63,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     const headers = new Headers(req.headers);
-    headers.set("oai-authenticated-user-id", "local-owner");
+    headers.delete("oai-authenticated-user-id");
     const chunks = [];
     let bytes = 0;
     for await (const chunk of req) {
@@ -64,7 +72,7 @@ const server = createServer(async (req, res) => {
       chunks.push(chunk);
     }
     const body = chunks.length ? Buffer.concat(chunks) : undefined;
-    const response = await app.fetch(new Request(origin + req.url, { method: req.method, headers, body }), env);
+    const response = await host.fetch(new Request(origin + req.url, { method: req.method, headers, body }));
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(Buffer.from(await response.arrayBuffer()));
   } catch (error) {
@@ -76,8 +84,12 @@ const server = createServer(async (req, res) => {
 server.once("listening", () => {
   console.log("Market Lab → " + origin);
   if (withSchedule) {
-    const stopBatch = startBatch(time => runSlot(env, time));
+    const stopBatch = startBatch(time => host.runAll(runSlot, time));
     server.once("close", stopBatch);
+    const stopUsBatch = startUsBatch(time => host.runAll(runUsSlot, time));
+    server.once("close", stopUsBatch);
+    const stopMonitor = startMonitorBatch(time => host.runAll(runMonitor, time), time => { runtime.lastMonitorTick = time; });
+    server.once("close", stopMonitor);
   }
 });
 server.listen(port, "127.0.0.1");

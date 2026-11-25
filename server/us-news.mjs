@@ -146,9 +146,9 @@ function uniqueArticles(articles) {
   return distinct;
 }
 
-export async function collectOpeningNews(day, slot) {
-  const until = Date.parse(slot.date + "T09:00:00+09:00");
-  const close = Date.parse(day.previousBusinessDay?.integrated?.regularMarket?.endTime);
+export async function collectOpeningNews(day, slot, window = null) {
+  const until = window?.until ?? Date.parse(slot.date + "T09:00:00+09:00");
+  const close = window?.previousClose ?? Date.parse(day.previousBusinessDay?.integrated?.regularMarket?.endTime);
   const fallbackWindow = !Number.isFinite(close) || close >= until;
   const from = fallbackWindow ? until - 24 * 3600_000 : close;
   const results = await Promise.allSettled(feeds.map(feed => readFeed(feed, from, until)));
@@ -179,13 +179,18 @@ export async function collectOpeningNews(day, slot) {
 
 export function openingSignal(news, stock) {
   if (!news) return { score: 0, caution: false, reason: null, relevant: false };
-  const themes = Object.keys(symbolThemes).filter(key => symbolThemes[key].test(stock.name));
+  const usThemes = { chips: /^(?:NVDA|AMD|INTC|AVGO|MU|TSM|ASML|SMH|SOXX|SOXL|SOXS)$/,
+    autos: /^(?:TSLA|GM|F|RIVN|NIO|XPEV|LI)$/,
+    energy: /^(?:XOM|CVX|COP|SLB|XLE|USO)$/ };
+  const themes = Object.keys(symbolThemes).filter(key => symbolThemes[key].test(stock.name)
+    || (stock.marketCountry === "US" && usThemes[key].test(stock.symbol)));
   const inverse = /인버스|inverse|곱버스/i.test(stock.name);
   const sign = inverse ? -1 : 1;
   const sector = themes.reduce((sum, key) => sum + news.totals[key], 0) * sign;
   const impact = themes.filter(key => news.totals[key])
     .map(key => topics[key] + (news.totals[key] * sign > 0 ? " 우호" : " 부담"));
-  const broadFund = stock.type === "ETF" && /코스피|KOSPI|^(?:KODEX|TIGER|RISE|ACE|SOL|HANARO) 200(?:\s|$)/i.test(stock.name);
+  const broadFund = stock.type === "ETF" && (/코스피|KOSPI|^(?:KODEX|TIGER|RISE|ACE|SOL|HANARO) 200(?:\s|$)/i.test(stock.name)
+    || (stock.marketCountry === "US" && /^(?:SPY|IVV|VOO|QQQ|DIA|VTI)$/.test(stock.symbol)));
   const cautiousMarket = !inverse && news.stance === "cautious";
   const positiveMarket = !inverse && broadFund && news.stance === "positive";
   if (cautiousMarket || positiveMarket) impact.push(cautiousMarket ? "시장 부담" : "시장 우호");
