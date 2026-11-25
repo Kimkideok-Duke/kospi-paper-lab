@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#f6f7fc">
   <title>마켓랩 | 코스피 모의투자</title>
   <link rel="icon" href="/mark.svg">
-  <link rel="stylesheet" href="/app.css?v=20261125-news">
-  <script type="module" src="/app.js?v=20261125-news"></script>
+  <link rel="stylesheet" href="/app.css?v=20261125-manual">
+  <script type="module" src="/app.js?v=20261125-manual"></script>
 </head>
 <body>
   <header class="topbar">
@@ -29,11 +29,16 @@
       </div>
       <div class="intro-actions" id="dashboard-actions">
         <button id="demo-toggle" class="button secondary" type="button" data-icon="eye" aria-pressed="false">예시 보기</button>
-        <a href="/settings" data-page class="button primary" data-icon="link" id="connect-link">API 연결</a>
+        <a href="/settings" data-page class="button secondary" data-icon="link" id="connect-link">API 연결</a>
+        <button id="manual-run" class="button primary" type="button" data-icon="play" disabled>거래 실행</button>
       </div>
     </section>
     <div id="notice" class="notice" hidden role="status"></div><div id="live-announcement" class="live-announcement" role="status" aria-live="polite"></div>
     <section id="dashboard" class="view" aria-label="대시보드">
+      <div id="manual-result" class="notice manual-result" hidden>
+        <p id="manual-message" role="status" aria-live="polite"></p>
+        <a id="manual-trades" class="text-link" href="/trades" data-page hidden>거래내역 보기</a>
+      </div>
       <article class="hero" aria-label="총 평가자산">
         <div class="hero-graphic" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
         <div class="hero-main">

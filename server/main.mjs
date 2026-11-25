@@ -1,4 +1,4 @@
-import { INITIAL, LIMIT, START, END, account, initialState, kst, slotFor, slotTime } from "./engine.mjs";
+import { INITIAL, LIMIT, START, END, account, initialState, kst, manualSlotFor, slotFor, slotTime } from "./engine.mjs";
 import { issue, loadPrices, marketClient, scan, TossError } from "./toss.mjs";
 import { assets } from "./assets.mjs";
 
@@ -92,10 +92,19 @@ async function configure(env, id, secret) {
 async function runSlot(env, now = Date.now()) {
   const slot = slotFor(now);
   if (!slot || now < slotTime(slot)) return { status: "outside", message: "캠페인 기간의 배치 실행 구간이 아닙니다.", trades: [] };
+  return runMarketCheck(env, slot);
+}
+
+async function runMarketCheck(env, slot) {
   if (!(await record(env))?.secrets) return { status: "waiting", message: "토스증권 API 연결을 기다리고 있습니다.", trades: [] };
   return locked(env, async (row, write) => {
     const state = JSON.parse(row.state);
-    if (state.scans.some(item => item.id === slot.id && item.status !== "error")) {
+    const previous = state.scans.find(item => item.id === slot.id && item.status !== "error");
+    if (previous && slot.manual) {
+      const tradeIds = new Set(previous.tradeIds ?? []);
+      return { status: previous.status, message: previous.message, trades: state.trades.filter(trade => tradeIds.has(trade.id)) };
+    }
+    if (previous) {
       return { status: "duplicate", message: "이 시간의 실행은 이미 기록되어 있습니다.", trades: [] };
     }
     if (!row.secrets) return { status: "waiting", message: "토스증권 API 연결을 기다리고 있습니다.", trades: [] };
@@ -122,14 +131,16 @@ async function runSlot(env, now = Date.now()) {
       draft.scans = draft.scans.filter(item => item.id !== slot.id);
       draft.scans.push({ id: slot.id, time: Date.now(), status: result.status,
         message: result.message, tradeCount: result.trades?.length ?? 0,
+        ...(slot.manual ? { source: "manual", tradeIds: result.trades?.map(trade => trade.id) ?? [] } : {}),
         ...(result.news ? { news: result.news } : {}) });
       await write(draft, row.secrets, tokenPayload);
       return { ...result, trades: result.trades ?? [] };
     } catch (error) {
-      const message = error.message || "자동 분석을 마치지 못했습니다.";
+      const message = error.message || "시장 분석을 마치지 못했습니다.";
       state.lastError = { time: Date.now(), message };
       state.scans = state.scans.filter(item => item.id !== slot.id);
-      state.scans.push({ id: slot.id, time: Date.now(), status: "error", message, tradeCount: 0 });
+      state.scans.push({ id: slot.id, time: Date.now(), status: "error", message, tradeCount: 0,
+        ...(slot.manual ? { source: "manual" } : {}) });
       await write(state, row.secrets, tokenPayload);
       return { status: "error", message, trades: [] };
     }
@@ -180,7 +191,7 @@ function requireSameOrigin(request) {
   const origin = request.headers.get("origin");
   const url = new URL(request.url);
   if (origin !== url.origin && origin !== "https://kospi-paper-lab.kkd9013.chatgpt.site") {
-    throw new RequestError(403, "이 사이트에서 설정을 제출해 주세요.");
+    throw new RequestError(403, "이 사이트에서 요청해 주세요.");
   }
 }
 
@@ -226,6 +237,16 @@ async function handler(request, env) {
     }
     if (request.method === "POST") {
       requireSameOrigin(request);
+      if (pathname === "/api/manual-run") {
+        const { requestId } = (await body(request)) ?? {};
+        if (typeof requestId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestId)) {
+          throw new RequestError(400, "거래 실행 요청을 읽을 수 없습니다.");
+        }
+        const slot = manualSlotFor(Date.now(), requestId.toLowerCase());
+        return json(slot ? await runMarketCheck(env, slot) : {
+          status: "outside", message: "모의투자 기간의 거래일 정규장 연속매매 시간에 실행할 수 있습니다.", trades: [],
+        });
+      }
       if (pathname === "/api/connect") {
         const { id, secret } = (await body(request)) ?? {};
         if (typeof id !== "string" || typeof secret !== "string" || !id.trim() || !secret.trim()

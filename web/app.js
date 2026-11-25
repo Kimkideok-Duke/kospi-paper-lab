@@ -12,6 +12,7 @@ const paths = {
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4m8-4v4m-8 7h3m2 0h3m-8 3h3"/>',
   coins: '<ellipse cx="10" cy="7" rx="6" ry="3"/><path d="M4 7v4c0 1.7 2.7 3 6 3 1.2 0 2.2-.2 3-.45M4 11v4c0 1.7 2.7 3 6 3h1m5-11v3"/><circle cx="17.5" cy="16" r="3.5"/>',
   chart: '<path d="M4 19V5m0 14h16M7 15l4-4 3 2 5-6m-4 0h4v4"/>',
+  play: '<path d="M8 5l11 7-11 7z"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5m-18 4 9 5 9-5"/>',
   timer: '<circle cx="12" cy="13" r="8"/><path d="M12 13V9m0-7h0m-2 0h4m4 4 1.5-1.5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/>',
@@ -73,8 +74,10 @@ let tickQuotes = {};
 let page = "/";
 let filter = "ALL";
 let range = "all";
-let refreshing = false;
+let refreshTask = null;
 let announced = null;
+let manualRunning = false;
+let manualRequestId = null;
 
 async function request(path, payload) {
   const response = await fetch(path, payload === undefined ? undefined : {
@@ -121,7 +124,8 @@ function tradeList(trades, emptyText) {
   if (!trades.length) return emptyImage("list", emptyText, "기록된 거래의 금액과 손익이 여기에 표시됩니다.");
   return table(["체결 시각", "종목", "구분", "거래 금액", "매매 이유", "거래 실현손익", "총 평가자산"], trades.map(t => {
     const buy = t.side === "BUY";
-    return "<tr><td>" + stamp(t.time) + '</td><td class="symbol"><strong>' + safe(t.name) + '</strong><span class="small">' +
+    return "<tr><td>" + stamp(t.time) + (t.source === "manual" ? '<div class="small">수동 실행</div>' : '') +
+      '</td><td class="symbol"><strong>' + safe(t.name) + '</strong><span class="small">' +
       safe(t.symbol) + " · " + safe(t.type) + '</span></td><td><span class="side ' + (buy ? "buy" : "sell") + '">' +
       (buy ? "매수" : "매도") + '</span></td><td><strong>' + money(t.amount) + '</strong><div class="small">' +
       n.format(t.quantity) + "주 × " + money(t.price) + '</div></td><td class="reason">' + safe(t.reason) + '</td><td class="' +
@@ -165,6 +169,14 @@ function render() {
   $("#ip-pending").hidden = loaded && !failure;
   setText("#ip-pending", failure ? "서버 연결을 확인해 주세요." : "송신 IP 조회 가능 여부를 확인 중입니다.");
   $("#connect-link").lastChild.textContent = data.connected ? "API 설정" : "API 연결";
+  const manual = $("#manual-run");
+  manual.hidden = page !== "/";
+  manual.disabled = manualRunning || preview || !loaded || Boolean(failure) || !data.connected || data.finished;
+  manual.title = !data.connected ? "토스증권 API를 먼저 연결해 주세요."
+    : preview ? "실제 계좌 화면에서 사용하세요." : "정규장 연속매매 시간에 모의 거래를 한 번 실행합니다.";
+  manual.lastChild.textContent = manualRunning ? "분석 중" : "거래 실행";
+  $("#manual-result").hidden = preview || !$("#manual-message").textContent;
+  $("#demo-toggle").disabled = manualRunning;
   $("#demo-toggle").lastChild.textContent = preview ? "실제 계좌 보기" : "예시 보기";
   $("#demo-toggle").setAttribute("aria-pressed", String(preview));
   if (preview) showNotice("화면 예시용 샘플입니다. 모의 계좌의 거래와 잔액에는 영향이 없습니다.");
@@ -185,7 +197,7 @@ function render() {
   $$(".segments i").forEach((segment, index) => segment.classList.toggle("full", index < s.positions.length));
   const lastRun = s.scans.at(-1);
   setText("#batch-status", !loaded && !preview ? "확인 중" : s.batchEnabled ? "사이트 서버 배치" : "이 서버에서 미실행");
-  setText("#last-run", lastRun ? stamp(lastRun.time) : "—");
+  setText("#last-run", lastRun ? stamp(lastRun.time) + (lastRun.source === "manual" ? " · 수동" : "") : "—");
   setText("#next-run", s.finished ? "기간 종료" : !s.batchEnabled ? "—" : s.connected ? (s.next ? stamp(s.next) : "예정 없음") : "연결 후 시작");
   setText("#coverage", latest ? n.format(latest.observed) + " / " + n.format(latest.universe) + "종목" : "—");
   setText("#kospi", latest?.index != null ? fixed.format(latest.index) + (latest.indexChange != null ? " (" + pct(latest.indexChange) + ")" : "") : "—");
@@ -206,7 +218,8 @@ function render() {
   const openBriefs = new Set($$("#scan-list details[open]").map(details => details.dataset.slot));
   $("#scan-list").innerHTML = s.scans.length ? [...s.scans].reverse().map(log =>
     '<div class="scan-row"><time datetime="' + new Date(log.time).toISOString() + '">' + stamp(log.time) +
-    "</time><div>" + safe(log.message) + (log.news ? '<details class="scan-news" data-slot="' + safe(log.id) + '"' +
+    "</time><div>" + (log.source === "manual" ? '<span class="plain-badge scan-mode">수동</span>' : '') + safe(log.message) +
+    (log.news ? '<details class="scan-news" data-slot="' + safe(log.id) + '"' +
       (openBriefs.has(log.id) ? ' open' : '') + '><summary>09시 미국 뉴스</summary>'
       + openingNewsBrief(log.news) + '</details>' : '') + "</div></div>").join("") :
     emptyImage("timer", "분석 기록이 없습니다", "API를 연결한 뒤 시간별 결과를 확인할 수 있습니다.");
@@ -307,9 +320,12 @@ function draw() {
   canvas.setAttribute("aria-label", "평가자산 추이. " + (last ? "최신 기록 " + money(last.total) : "시작 원금 " + money(data.initial)));
 }
 
-async function refresh() {
-  if (refreshing) return;
-  refreshing = true;
+function refresh() {
+  refreshTask ??= refreshData().finally(() => { refreshTask = null; });
+  return refreshTask;
+}
+
+async function refreshData() {
   try {
     const next = await request("/api/state");
     const last = next.trades.at(-1)?.id ?? "0";
@@ -332,9 +348,15 @@ async function refresh() {
     failure = error.message;
   } finally {
     loaded = true;
-    refreshing = false;
     render();
   }
+}
+
+function showManualResult(message, error = false, traded = false) {
+  setText("#manual-message", message);
+  $("#manual-result").classList.toggle("error", error);
+  $("#manual-trades").hidden = !traded;
+  $("#manual-result").hidden = preview;
 }
 
 function showResult(message, error = false) {
@@ -352,6 +374,25 @@ document.addEventListener("click", event => {
 });
 window.addEventListener("popstate", () => selectPage(location.pathname));
 $("#demo-toggle").addEventListener("click", () => { preview = !preview; render(); });
+$("#manual-run").addEventListener("click", async () => {
+  if (manualRunning || preview || !data.connected || data.finished) return;
+  manualRunning = true;
+  showManualResult("최신 시세를 모아 모의 거래 조건을 확인 중입니다.");
+  render();
+  try {
+    manualRequestId ??= crypto.randomUUID();
+    const result = await request("/api/manual-run", { requestId: manualRequestId });
+    showManualResult(result.message, result.status === "error", result.trades.length > 0);
+    manualRequestId = null;
+    if (refreshTask) await refreshTask;
+    await refresh();
+  } catch (error) {
+    showManualResult(error.message, true);
+  } finally {
+    manualRunning = false;
+    render();
+  }
+});
 $$("[data-filter]").forEach(button => button.addEventListener("click", () => {
   filter = button.dataset.filter;
   $$("[data-filter]").forEach(item => item.setAttribute("aria-pressed", String(item === button)));

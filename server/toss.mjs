@@ -149,7 +149,7 @@ async function assess(client, stock, slot, phaseStart, context) {
   const prints = Array.isArray(trades) ? trades.filter(item => nearby(Date.parse(item.timestamp), Date.now(), 90_000)) : null;
   if (prints && prints.length === 0) return null;
   const reason = [
-    stock.hourly !== null ? "직전 시간 " + percentage(stock.hourly) : null,
+    stock.hourly !== null ? (slot.manual ? "최근 정기 분석 " : "직전 시간 ") + percentage(stock.hourly) : null,
     "최근 분봉 " + percentage(candles.momentum),
     "호가 간격 " + spread.toFixed(2) + "%",
     institutional ? (institutional > 0 ? "외국인·기관 순매수" : "외국인·기관 순매도") + " " + Math.abs(institutional).toLocaleString("ko-KR") + "주" : null,
@@ -185,6 +185,9 @@ export async function scan(state, slot, client, now) {
   }
   const universe = state.universe.stocks;
   const symbols = [...new Set([...universe.map(stock => stock.symbol), ...state.positions.map(p => p.symbol)])];
+  const morningCutoff = Date.parse(slot.date + "T09:00:00+09:00");
+  const priorNews = slot.hour === 9 ? state.scans.findLast(item => item.news?.until === morningCutoff
+    && item.news.sources?.length >= 2)?.news : null;
   const [quotes, rankings, indicators, indexCandles, currency, flows, news] = await Promise.all([
     loadPrices(client, symbols),
     client.get("rankings", { type: "MARKET_TRADING_AMOUNT", marketCountry: "KR", duration: "realtime", count: 100 }, true),
@@ -192,7 +195,7 @@ export async function scan(state, slot, client, now) {
     client.get("market-indicators/KOSPI/candles", { interval: "1d", count: 3 }, true),
     client.get("exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW" }, true),
     client.get("market-indicators/KOSPI/investor-trading", { interval: "1d", count: 1 }, true),
-    slot.hour === 9 && phase === "trade" ? collectOpeningNews(day, slot) : null,
+    slot.hour === 9 && phase === "trade" ? priorNews ?? collectOpeningNews(day, slot) : null,
   ]);
   if (quotes.size === 0) throw new Error("토스증권에서 유효한 현재가를 받지 못했습니다.");
   const regular = day.today.integrated.regularMarket;
@@ -206,7 +209,8 @@ export async function scan(state, slot, client, now) {
   const context = { ranked, indexChange, news };
   const flow = flows?.records?.[0];
   const net = flow?.foreigner ? Number(flow.foreigner.buyAmount) - Number(flow.foreigner.sellAmount) : null;
-  const prior = state.previous?.date === slot.date && state.previous.hour === slot.hour - 1 ? state.previous.prices : null;
+  const priorHours = slot.manual ? [slot.hour, slot.hour - 1] : [slot.hour - 1];
+  const prior = state.previous?.date === slot.date && priorHours.includes(state.previous.hour) ? state.previous.prices : null;
   const current = Date.now();
   const eligible = phase === "trade" ? shortlist(universe, quotes, prior, context, current, regularStart,
     new Set(state.positions.map(p => p.symbol)), Math.floor(account(state).total / 5)) : [];
@@ -229,10 +233,11 @@ export async function scan(state, slot, client, now) {
   }
 
   const finish = Date.now();
-  const trades = execute(state, { now: finish, regularStart, regularEnd, quotes, previous: prior, candidates, review: phase === "review",
+  const trades = execute(state, { now: finish, regularStart, regularEnd, quotes, previous: prior, candidates,
+    review: phase === "review", manual: slot.manual,
     openingExit: news ? (position, price) => openingExitReason(news, position, price, ranked.get(position.symbol)?.price?.basePrice) : null });
   const freshQuotes = [...quotes.entries()].filter(([, q]) => fresh(q, finish, regularStart));
-  if (phase === "trade") {
+  if (phase === "trade" && !slot.manual) {
     state.previous = { date: slot.date, hour: slot.hour,
       prices: Object.fromEntries(freshQuotes.map(([symbol, quote]) => [symbol, quote.price])) };
   }
@@ -247,6 +252,7 @@ export async function scan(state, slot, client, now) {
     foreignNet: Number.isFinite(net) ? net : null, flowDate: flow?.date ?? null, missing: [...client.missing],
   };
   const message = phase === "review" ? "16시 모의 계좌 평가를 기록했습니다."
+    : finish >= regularEnd ? "분석 중 연속매매 시간이 끝나 모의 주문을 건너뛰었습니다."
     : trades.length ? trades.length + "건의 모의 거래를 기록했습니다."
     : freshQuotes.length ? "시세를 분석했습니다. 체결 조건을 충족한 거래가 없었습니다."
     : "최신 체결가가 확인되지 않아 주문을 건너뛰었습니다.";

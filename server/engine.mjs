@@ -7,14 +7,25 @@ export function kst(now) {
   return new Date(now + 9 * 3600_000).toISOString();
 }
 
-export function slotFor(now) {
+function campaignSlot(now) {
   const local = kst(now);
   const date = local.slice(0, 10);
   const hour = Number(local.slice(11, 13));
-  const minute = Number(local.slice(14, 16));
-  if (date < START || date >= END || hour < 9 || hour > 16 || minute >= 15) return null;
+  if (date < START || date >= END || hour < 9 || hour > 16) return null;
   if ([0, 6].includes(new Date(date).getUTCDay())) return null;
-  return { date, hour, id: local.slice(0, 13), review: hour === 16 };
+  return { date, hour, id: local.slice(0, 13) };
+}
+
+export function slotFor(now) {
+  const slot = campaignSlot(now);
+  if (!slot || Math.floor(now % 3600_000 / 60_000) >= 15) return null;
+  return { ...slot, review: slot.hour === 16 };
+}
+
+export function manualSlotFor(now, requestId) {
+  const slot = campaignSlot(now);
+  if (!slot || slot.hour === 16) return null;
+  return { ...slot, id: "manual:" + requestId, manual: true, review: false };
 }
 
 export function slotTime(slot) {
@@ -74,25 +85,26 @@ export function mark(state, quotes, time) {
   }
 }
 
-export function sellReason(position, quote, previousPrice) {
+export function sellReason(position, quote, previousPrice, manual = false) {
   const change = rate(quote.price, position.entry);
   const intraday = rate(quote.price, previousPrice);
   if (change <= -2.5) return "매수가 대비 " + percentage(change) + " 하락으로 손절 기준(−2.5%) 도달";
   if (change >= 5) return "매수가 대비 " + percentage(change) + " 상승으로 익절 기준(+5%) 도달";
-  if (intraday !== null && intraday <= -1.5) return "직전 시간 대비 " + percentage(intraday) + "로 단기 추세 약화";
+  if (intraday !== null && intraday <= -1.5) return (manual ? "최근 정기 분석 대비 " : "직전 시간 대비 ") + percentage(intraday) + "로 단기 추세 약화";
   return null;
 }
 
-function tradeRow(state, position, side, quote, reason, time, realized) {
+function tradeRow(state, position, side, quote, reason, time, realized, manual) {
   const totals = account(state);
   return {
     id: String(state.trades.length + 1), time, quoteTime: quote.time, symbol: position.symbol,
     name: position.name, type: position.type, side, quantity: position.quantity, price: quote.price,
     amount: quote.price * position.quantity, reason, realized, total: totals.total, totalPnl: totals.pnl,
+    source: manual ? "manual" : "batch",
   };
 }
 
-export function execute(state, { now, regularStart, regularEnd, quotes, previous, candidates, review, openingExit }) {
+export function execute(state, { now, regularStart, regularEnd, quotes, previous, candidates, review, openingExit, manual }) {
   mark(state, quotes, now);
   const trades = [];
   if (review || now < regularStart || now >= regularEnd) return trades;
@@ -100,11 +112,11 @@ export function execute(state, { now, regularStart, regularEnd, quotes, previous
   for (const position of [...state.positions]) {
     const quote = quotes.get(position.symbol);
     if (!fresh(quote, now, regularStart)) continue;
-    const reason = sellReason(position, quote, previous?.[position.symbol]) ?? openingExit?.(position, quote.price);
+    const reason = sellReason(position, quote, previous?.[position.symbol], manual) ?? openingExit?.(position, quote.price);
     if (!reason) continue;
     state.cash += position.quantity * quote.price;
     state.positions = state.positions.filter(item => item.symbol !== position.symbol);
-    const trade = tradeRow(state, position, "SELL", quote, reason, now, (quote.price - position.entry) * position.quantity);
+    const trade = tradeRow(state, position, "SELL", quote, reason, now, (quote.price - position.entry) * position.quantity, manual);
     state.trades.push(trade);
     trades.push(trade);
     sold.add(position.symbol);
@@ -121,7 +133,7 @@ export function execute(state, { now, regularStart, regularEnd, quotes, previous
       quantity, entry: quote.price, price: quote.price, quoteTime: quote.time };
     state.cash -= position.quantity * quote.price;
     state.positions.push(position);
-    const trade = tradeRow(state, position, "BUY", quote, candidate.reason, now, 0);
+    const trade = tradeRow(state, position, "BUY", quote, candidate.reason, now, 0, manual);
     state.trades.push(trade);
     trades.push(trade);
   }

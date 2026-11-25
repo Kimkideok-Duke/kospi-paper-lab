@@ -45,7 +45,7 @@ test("portfolio caps holdings, accounts for gross amounts, and never trades on s
   assert.equal(sells[0].totalPnl, 160000);
 });
 
-test("opening batch uses weekend U.S. headlines to reduce ETF position size and persists its evidence", async t => {
+test("opening news reduces ETF entry and an off-schedule manual run shares the same ledger", async t => {
   const monday = "2026-11-30";
   const mondayAt = clock => at(clock, monday);
   const previousClose = at("15:30", "2026-11-27");
@@ -105,10 +105,11 @@ test("opening batch uses weekend U.S. headlines to reduce ETF position size and 
     if (route === "exchange-rate") return result({ midRate: "1400", validFrom: time() });
     throw Error("unexpected fixture route " + route);
   });
-  const api = (route, body, signedIn = true) => app.fetch(new Request("https://test.local" + route, body === undefined
-    ? { headers: signedIn ? { "oai-authenticated-user-id": "owner" } : {} }
-    : { method: "POST", headers: { "oai-authenticated-user-id": "owner", "content-type": "application/json", origin: "https://test.local" },
-      body: JSON.stringify(body) }), env);
+  const api = (route, body, signedIn = true, origin = "https://test.local") => {
+    const headers = signedIn ? { "oai-authenticated-user-id": "owner" } : {};
+    return app.fetch(new Request("https://test.local" + route, body === undefined ? { headers }
+      : { method: "POST", headers: { ...headers, "content-type": "application/json", origin }, body: JSON.stringify(body) }), env);
+  };
   assert.equal((await api("/api/state", undefined, false)).status, 401);
   const hosted = await (await api("/api/state")).json();
   assert.equal(hosted.batchEnabled, false);
@@ -149,12 +150,21 @@ test("opening batch uses weekend U.S. headlines to reduce ETF position size and 
   assert.equal((await runSlot(env)).status, "duplicate");
   assert.ok(called.mock.callCount() > 10);
 
-  t.mock.timers.setTime(mondayAt("11:02"));
+  t.mock.timers.setTime(mondayAt("11:45"));
   outcome = 10600;
-  const sale = await runSlot(env);
+  assert.equal((await runSlot(env)).status, "outside");
+  assert.equal((await api("/api/manual-run", {})).status, 400);
+  const manual = { requestId: "58d7c85b-fc16-4d99-ad5f-f456301e4c55" };
+  assert.equal((await api("/api/manual-run", manual, false)).status, 401);
+  assert.equal((await api("/api/manual-run", manual, true, "https://other.local")).status, 403);
+  const concurrent = await Promise.all([api("/api/manual-run", manual), api("/api/manual-run", manual)]);
+  assert.deepEqual(concurrent.map(response => response.status).sort(), [200, 409]);
+  const sale = await concurrent.find(response => response.status === 200).json();
   assert.equal(sale.status, "ok");
   assert.equal(sale.trades.length, 1);
+  assert.equal(sale.trades[0].source, "manual");
   assert.equal(sale.trades[0].realized, 78000);
+  assert.deepEqual((await (await api("/api/manual-run", manual)).json()).trades, sale.trades);
   assert.equal(newsRequests, first.news.feedCount);
   const saved = await (await api("/api/state")).json();
   assert.equal(saved.trades.length, 2);
@@ -163,6 +173,19 @@ test("opening batch uses weekend U.S. headlines to reduce ETF position size and 
   assert.equal(saved.history.length, 2);
   assert.deepEqual(saved.openingNews, first.news);
   assert.deepEqual(saved.scans[0].news, first.news);
+  assert.equal(saved.scans[1].source, "manual");
+
+  t.mock.timers.setTime(mondayAt("12:00"));
+  outcome = 9800;
+  const secondRequest = { requestId: "ac206bac-4571-44e4-9b1f-84887682ea1d" };
+  assert.equal((await (await api("/api/manual-run", secondRequest)).json()).status, "ok");
+  assert.equal((await runSlot(env)).status, "ok");
+  assert.equal((await runSlot(env)).status, "duplicate");
+
+  t.mock.timers.setTime(mondayAt("15:40"));
+  const outside = await (await api("/api/manual-run", { requestId: "2857c527-07c7-4bd8-aa7b-01de88c59a90" })).json();
+  assert.equal(outside.status, "outside");
+  assert.deepEqual(outside.trades, []);
   assert.equal((await api("/api/disconnect", {})).status, 200);
   assert.equal((await (await api("/api/state")).json()).connected, false);
   assert.equal((await (await api("/api/state")).json()).trades.length, 2);
