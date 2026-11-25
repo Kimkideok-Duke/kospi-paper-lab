@@ -145,8 +145,9 @@ function nextSlot(now) {
   return null;
 }
 
-function view(row, batchEnabled) {
+function view(row, env) {
   const state = row ? JSON.parse(row.state) : initialState();
+  const batchEnabled = env.MARKETLAB_BATCH === true;
   const now = Date.now();
   const date = kst(now).slice(0, 10);
   let next = nextSlot(now);
@@ -159,6 +160,7 @@ function view(row, batchEnabled) {
   }
   return {
     start: START, end: END, now, next: batchEnabled ? next : null, batchEnabled, initial: INITIAL, limit: LIMIT,
+    canCheckIp: typeof env.connectionIp === "function",
     connected: Boolean(row?.secrets), totals: account(state),
     positions: state.positions, trades: state.trades,
     history: state.history, scans: state.scans.slice(-100),
@@ -200,10 +202,18 @@ async function handler(request, env) {
   const { pathname } = new URL(request.url);
   if (pathname.startsWith("/api/")) {
     authenticate(request);
-    if (pathname === "/api/state" && request.method === "GET") return json(view(await record(env), env.MARKETLAB_BATCH === true));
+    if (pathname === "/api/state" && request.method === "GET") return json(view(await record(env), env));
+    if (pathname === "/api/connection-ip" && request.method === "GET") {
+      if (typeof env.connectionIp !== "function") throw new RequestError(404, "로컬 마켓랩에서 송신 IP를 확인해 주세요.");
+      try {
+        return json({ ip: await env.connectionIp() });
+      } catch {
+        throw new RequestError(502, "서버의 공인 IPv4를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      }
+    }
     if (pathname === "/api/quotes" && request.method === "GET") {
       const row = await record(env);
-      const data = view(row, env.MARKETLAB_BATCH === true);
+      const data = view(row, env);
       if (data.finished || !row?.access_token || !data.positions.length) return json({ quotes: {} });
       const slot = slotFor(Math.floor(Date.now() / 3600_000) * 3600_000);
       if (!slot || slot.review) return json({ quotes: {} });

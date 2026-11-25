@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
+import { setDefaultResultOrder } from "node:dns";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { isIPv4 } from "node:net";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,6 +14,8 @@ const root = process.env.MARKETLAB_DATA ?? resolve(process.env.LOCALAPPDATA ?? h
 const port = Number(process.env.MARKETLAB_PORT ?? 8765);
 const origin = "http://127.0.0.1:" + port;
 const withSchedule = !process.argv.includes("--preview");
+// Prefer the same address family as the public IP shown for Toss's allowlist.
+setDefaultResultOrder("ipv4first");
 mkdirSync(root, { recursive: true, mode: 0o700 });
 const keyFile = resolve(root, "key");
 try {
@@ -32,7 +36,17 @@ const DB = {
     return { ...bind(), bind };
   },
 };
-const env = { DB, MARKETLAB_KEY: readFileSync(keyFile, "utf8"), MARKETLAB_BATCH: withSchedule };
+async function connectionIp() {
+  const response = await fetch("https://api.ipify.org?format=json", {
+    redirect: "error", signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error("Public IP lookup failed");
+  const { ip } = await response.json();
+  if (typeof ip !== "string" || !isIPv4(ip)) throw new Error("Invalid public IPv4");
+  return ip;
+}
+
+const env = { DB, MARKETLAB_KEY: readFileSync(keyFile, "utf8"), MARKETLAB_BATCH: withSchedule, connectionIp };
 
 const server = createServer(async (req, res) => {
   try {

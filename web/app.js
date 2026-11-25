@@ -148,6 +148,10 @@ function render() {
   connected.innerHTML = "<i></i> " + (preview ? "샘플 데이터" : failure ? "연결 상태 확인 불가" : !loaded ? "연결 확인 중"
     : data.connected ? "토스증권 연결됨" : "토스증권 미연결");
   $("#disconnect").hidden = !data.connected;
+  $("#ip-local").hidden = !loaded || Boolean(failure) || !data.canCheckIp;
+  $("#ip-hosted").hidden = !loaded || Boolean(failure) || data.canCheckIp === true;
+  $("#ip-pending").hidden = loaded && !failure;
+  setText("#ip-pending", failure ? "서버 연결을 확인해 주세요." : "송신 IP 조회 가능 여부를 확인 중입니다.");
   $("#connect-link").lastChild.textContent = data.connected ? "API 설정" : "API 연결";
   $("#demo-toggle").lastChild.textContent = preview ? "실제 계좌 보기" : "예시 보기";
   $("#demo-toggle").setAttribute("aria-pressed", String(preview));
@@ -351,6 +355,41 @@ $("#reveal").addEventListener("click", () => {
   $("#reveal").setAttribute("aria-pressed", String(show));
   $("#reveal").setAttribute("aria-label", show ? "시크릿 숨기기" : "시크릿 표시");
 });
+const ipAddress = $("#connection-ip");
+const checkIp = $("#check-ip");
+const copyIp = $("#copy-ip");
+const ipResult = $("#ip-result");
+
+checkIp.addEventListener("click", async () => {
+  checkIp.disabled = true;
+  ipAddress.value = "";
+  ipAddress.hidden = true;
+  copyIp.hidden = true;
+  ipResult.hidden = false;
+  ipResult.textContent = "서버의 공인 IPv4를 확인 중입니다.";
+  try {
+    const { ip } = await request("/api/connection-ip");
+    ipAddress.value = ip;
+    ipAddress.hidden = false;
+    copyIp.hidden = false;
+    ipResult.textContent = "공인 IPv4를 확인했습니다.";
+  } catch (error) {
+    ipResult.textContent = error.message;
+  } finally {
+    checkIp.disabled = false;
+  }
+});
+
+copyIp.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(ipAddress.value);
+    ipResult.textContent = "IP 주소를 복사했습니다.";
+  } catch {
+    ipAddress.select();
+    ipResult.textContent = "선택된 IP 주소를 복사해 주세요.";
+  }
+});
+
 $("#api-form").addEventListener("submit", async event => {
   event.preventDefault();
   const id = $("#client-id").value.trim();

@@ -115,6 +115,20 @@
       <div class="settings-grid">
         <article class="card data-card settings-card">
           <div class="card-heading"><div><h2>토스증권 Open API</h2><p>토스증권에서 발급받은 개인 API 키를 입력해 주세요.</p></div><span class="metric-icon purple" data-icon="link"></span></div>
+          <section class="ip-panel" aria-labelledby="ip-heading">
+            <h3 id="ip-heading" data-icon="globe">토스증권 연결 IP</h3>
+            <div id="ip-local" hidden>
+              <p>마켓랩 서버의 공인 IPv4를 확인해 토스증권 WTS의 <strong>설정 → Open API → 허용 IP 관리</strong>에 등록하세요.</p>
+              <div class="ip-actions">
+                <button type="button" class="button secondary" id="check-ip">공인 IP 확인</button>
+                <input id="connection-ip" aria-label="마켓랩 서버 공인 IPv4" readonly hidden>
+                <button type="button" class="button secondary" id="copy-ip" hidden>복사</button>
+              </div>
+              <p id="ip-result" role="status" hidden></p>
+            </div>
+            <p id="ip-hosted" hidden>정시 배치가 실행 중인 <a href="http://127.0.0.1:8765/settings" class="text-link">로컬 마켓랩 설정</a>에서 등록할 IP를 확인하세요.</p>
+            <p id="ip-pending">송신 IP 조회 가능 여부를 확인 중입니다.</p>
+          </section>
           <form id="api-form">
             <label for="client-id">Client ID</label>
             <input id="client-id" name="client-id" placeholder="토스증권 Client ID" maxlength="512" autocomplete="off" required>
