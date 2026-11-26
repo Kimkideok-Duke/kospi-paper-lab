@@ -26,7 +26,7 @@ function fixture(t) {
 }
 test('sessions gate every account route, forged identities and cross-origin login cannot bypass authentication', async t => {
   const { call } = fixture(t);
-  for (const path of ['/api/state','/api/us/state','/api/quotes','/api/us/quotes','/api/health']) assert.equal((await call(path, undefined, '', { 'oai-authenticated-user-id': 'owner' })).status, 401);
+  for (const path of ['/api/state','/api/us/state','/api/quotes','/api/us/quotes','/api/health','/api/reviews','/api/us/reviews']) assert.equal((await call(path, undefined, '', { 'oai-authenticated-user-id': 'owner' })).status, 401);
   assert.equal((await call('/')).status, 303);
   assert.equal((await call('/login')).status, 200);
   assert.equal((await call('/api/auth/login', { username: 'marketlab', password }, '', { origin: 'https://evil.example' })).status, 403);
@@ -36,11 +36,14 @@ test('sessions gate every account route, forged identities and cross-origin logi
 test('owner data survives migration; invited users have separate KR/US balances, settings, credentials, locks and key material', async t => {
   const { call, login, register, root, masterKey, host } = fixture(t);
   const db = new DatabaseSync(join(root,'campaign.sqlite'));
-  const state = initialState(); state.cash = 7654321; state.trades.push({ id: 'historic-owner', side: 'BUY', amount: 12345 });
+  const state = initialState(); state.reviews = { "2026-11-25": { date: "2026-11-25", summary: { equityPnl: 100, realized: 50 }, adaptive: { changed: false }, overview: "owner-private-review" } }; state.cash = 7654321; state.trades.push({ id: 'historic-owner', side: 'BUY', amount: 12345 });
   db.prepare('INSERT INTO campaign(id,state) VALUES(1,?)').run(JSON.stringify(state)); db.close();
   const owner = await login(), member = await register(owner);
   assert.match(owner, /marketlab_session=/);
   const ownerState = await (await call('/api/state', undefined, owner)).json();
+  assert.equal((await (await call('/api/reviews?date=2026-11-25', undefined, owner)).json()).report.overview, 'owner-private-review');
+  assert.equal((await (await call('/api/reviews?date=2026-11-25', undefined, member.cookie, { 'oai-authenticated-user-id': 'owner' })).json()).report, null);
+  assert.equal((await call('/api/reviews?date=invalid', undefined, owner)).status, 400);
   assert.equal(ownerState.totals.cash, 7654321); assert.equal(ownerState.trades[0].id, 'historic-owner');
   for(const path of ['/api/state','/api/us/state']) { const s = await (await call(path, undefined, member.cookie, { 'oai-authenticated-user-id': 'owner' })).json(); assert.equal(s.totals.cash, 10000000); assert.equal(s.trades.length,0); assert.equal(s.connected,false); }
   assert.equal((await call('/api/auth/invites', {}, member.cookie)).status,403);

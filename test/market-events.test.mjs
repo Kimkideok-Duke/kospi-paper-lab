@@ -103,7 +103,7 @@ test('server monitor reacts to a new filing before the next ten-minute slot, rec
   s.previous={date:'2026-11-26',time:now-600000,prices:{'005930':10000}};const previous=structuredClone(s.previous);
   ingestEvents(s,snapshot([]),'KR',now-60000);
   const key=await crypto.subtle.importKey('raw',new Uint8Array(32).fill(1),'AES-GCM',false,['encrypt']);const iv=new Uint8Array(12);
-  const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode('toss:token')},key,new TextEncoder().encode(JSON.stringify({value:'fake-events-test-token',expires:now+3600000})));
+  const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode('toss:token')},key,new TextEncoder().encode(JSON.stringify({value:'fake-events-test-token',expires:now+24*3600000})));
   const token=Buffer.from(iv).toString('base64')+'.'+Buffer.from(cipher).toString('base64');
   db.prepare('INSERT INTO campaign(id,state,secrets,access_token) VALUES(1,?,?,?)').run(JSON.stringify(s),'unused-test-credentials',token);
   let realOrders=0;
@@ -111,7 +111,7 @@ test('server monitor reacts to a new filing before the next ten-minute slot, rec
     const url=new URL(input);assert.equal(url.hostname,'openapi.tossinvest.com');assert.equal(options.method,'GET');
     const route=url.pathname.replace('/api/v1/',''),timestamp=new Date(Date.now()).toISOString();let result;
     if(/orders/.test(route)){realOrders++;throw Error('No live orders');}
-    if(route==='market-calendar/KR')result={today:{date:'2026-11-26',integrated:{regularMarket:{startTime:'2026-11-26T09:00:00+09:00',singlePriceAuctionStartTime:'2026-11-26T15:20:00+09:00'}}}};
+    if(route==='market-calendar/KR')result={today:{date:'2026-11-26',integrated:{regularMarket:{startTime:'2026-11-26T09:00:00+09:00',singlePriceAuctionStartTime:'2026-11-26T15:20:00+09:00',endTime:'2026-11-26T15:30:00+09:00'}}}};
     else if(route==='market-calendar/US')result={today:{date:'2026-11-25',regularMarket:{startTime:'2026-11-25T14:30:00Z',endTime:'2026-11-25T21:00:00Z'}}};
     else if(route==='prices')result=url.searchParams.get('symbols').split(',').map(symbol=>({symbol,currency:'KRW',lastPrice:'9900',timestamp}));
     else if(route==='orderbook')result={currency:'KRW',timestamp,asks:[{price:'9905',volume:'1000'}],bids:[{price:'9895',volume:'1000'}]};
@@ -132,4 +132,7 @@ test('server monitor reacts to a new filing before the next ten-minute slot, rec
   assert.equal(saved.trades.length,1);assert.equal(saved.scans.filter(s=>s.source==='event').length,1);assert.equal(realOrders,0);
   const response=await app.fetch(new Request('http://localhost/api/state',{headers:{'oai-authenticated-user-id':'test'}}),env);
   const view=await response.json();assert.ok(view.eventWatch.sources.length);assert.equal(view.eventWatch.reactions.length,1);assert.ok(!JSON.stringify(view).includes('fake-events-test-token'));
+  clock=Date.parse('2026-11-26T15:31:30+09:00');await runMonitor(env,Date.now());
+  const reviewResponse=await app.fetch(new Request('http://localhost/api/reviews?date=2026-11-26',{headers:{'oai-authenticated-user-id':'test'}}),env);
+  const review=await reviewResponse.json();assert.equal(review.report.status,'final');assert.equal(review.report.decisions.length,1);assert.ok(review.report.quality.some(v=>v.includes('마감 시세')));
 });

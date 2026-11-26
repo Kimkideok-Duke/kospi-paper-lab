@@ -35,5 +35,7 @@ await Promise.all([
   copy("server/paper-analytics.mjs", "dist/server/paper-analytics.mjs"),
   copy("server/market-transport.mjs", "dist/server/market-transport.mjs"),
   copy("server/market-events.mjs", "dist/server/market-events.mjs"),
+  copy("server/daily-review.mjs", "dist/server/daily-review.mjs"),
+  copy("server/strategy-policy.mjs", "dist/server/strategy-policy.mjs"),
   copy(".openai/hosting.json", "dist/.openai/hosting.json"),
 ]);

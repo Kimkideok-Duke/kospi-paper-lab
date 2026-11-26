@@ -2,6 +2,8 @@ import { fresh, rate, percentage, weight } from "./engine.mjs";
 import { executeUs, usAccount, usdQuoteMap, validFx } from "./us-engine.mjs";
 import { collectOpeningNews, openingSignal, openingExitReason } from "./us-news.mjs";
 import { recordAnalytics } from "./paper-analytics.mjs";
+import { strategyPolicy, activateDailyPolicy } from "./strategy-policy.mjs";
+import { recordReviewEvidence } from "./daily-review.mjs";
 import { eventSignal, eventExitReason } from "./market-events.mjs";
 import { markPaper } from "./paper-model.mjs";
 
@@ -25,14 +27,14 @@ async function assess(client, stock, slot, context) {
   const asks = book.asks?.filter(item => Number(item.price) > 0 && Number(item.volume) > 0).map(item => Number(item.price)) ?? [];
   const bids = book.bids?.filter(item => Number(item.price) > 0 && Number(item.volume) > 0).map(item => Number(item.price)) ?? [];
   const ask = Math.min(...asks), bid = Math.max(...bids);
-  const spread = rate(ask, bid);
-  if (!Number.isFinite(spread) || spread < 0 || spread > 0.65 || !(bid > 0 && ask >= bid)) return null;
+  const spread = rate(ask, bid), policy = strategyPolicy(context.state);
+  if (!Number.isFinite(spread) || spread < 0 || spread > policy.maximumSpreadPct || !(bid > 0 && ask >= bid)) return null;
   const candles = (series?.candles ?? []).filter(c => c.currency === "USD" && Date.parse(c.timestamp) >= slot.regularStart
     && recent(Date.parse(c.timestamp), now, 70 * 60_000) && Number(c.closePrice) > 0).sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
   if (candles.length < 3 || !recent(Date.parse(candles[0].timestamp), now, 3 * 60_000)) return null;
   const momentum = rate(stock.q.price, Number(candles[Math.min(candles.length - 1, 14)].closePrice));
   const amount = candles.slice(0, 15).reduce((sum, c) => sum + Math.max(0, Number(c.volume) || 0) * Number(c.closePrice), 0);
-  if (!Number.isFinite(momentum) || momentum <= (stock.news.caution ? 0.45 : 0.15) || amount < 20_000_000 / context.fx.rate) return null;
+  if (!Number.isFinite(momentum) || momentum <= (stock.news.caution ? Math.max(0.45, policy.minimumMomentumPct) : policy.minimumMomentumPct) || amount < 20_000_000 / context.fx.rate) return null;
   if (stock.hourly !== null && stock.hourly < 0.2) return null;
   if (context.indexChange !== null && context.indexChange < -1.5 && (stock.hourly ?? momentum) < 0.65) return null;
   return { ...stock,
@@ -73,7 +75,8 @@ export async function scanUs(state, slot, client, calendar) {
   const spy = quotes.get("SPY"), spyBase = Number(ranked.get("SPY")?.price?.basePrice);
   const indexChange = fresh(spy, Date.now(), slot.regularStart) && spyBase > 0 ? rate(spy.price, spyBase) : null;
   const previous = state.previous?.date === slot.date && (state.previous.index === slot.index - 1 || (slot.manual && state.previous.index === slot.index)) ? state.previous.prices : null;
-  const context = { fx, indexChange };
+  activateDailyPolicy(state, "US", Date.now());
+  const context = { fx, indexChange, state };
   const candidates = [];
   const budget = usAccount(state).total / 5;
   const shortlisted = liquid.flatMap(stock => {
@@ -122,6 +125,7 @@ export async function scanUs(state, slot, client, calendar) {
     selection: "NASDAQ·NYSE·AMEX의 거래대금 상위 100종목 중 주식·ETF" };
   if (state.paperModel?.enabled) recordAnalytics(state, "US", finish, ["SPY", "QQQ"].flatMap(symbol => quotes.has(symbol)
     ? [{ symbol, name: symbol === "SPY" ? "SPY · S&P 500" : "QQQ · NASDAQ 100", price: quotes.get(symbol).price, time: quotes.get(symbol).time, fx: fillFx.rate }] : []), baselineEquity);
+  recordReviewEvidence(state, "US", quotes, fillFx, finish, candidates);
   return { status: slot.review ? "review" : "ok", trades, totals, news,
     message: slot.review ? "미국장 마감 모의 계좌 평가를 기록했습니다."
       : finish >= slot.regularEnd ? "분석 중 미국장이 종료되어 모의 체결을 건너뛰었습니다."

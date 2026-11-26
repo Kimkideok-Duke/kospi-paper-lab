@@ -1,4 +1,5 @@
-export const MODEL_VERSION = "paper-v4-intraday-events";
+import { activateDailyPolicy } from "./strategy-policy.mjs";
+export const MODEL_VERSION = "paper-v5-daily-review";
 export const defaults = market => ({ commissionBps: market === "US" ? 10 : 1.5, taxBps: market === "US" ? 0 : 20,
   fxSpreadBps: market === "US" ? 10 : 0, participationPct: 10, limitBps: 20, ttlSeconds: 300 });
 export const activeOrder = order => ["PENDING", "PARTIAL_FILLED"].includes(order.status);
@@ -18,6 +19,7 @@ export function upgradePaper(state, market, now) {
     state.versions.push({ id: state.paperModel.version, time: now, baseline: paperTotal(state, market),
       tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 1분 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · −2.5%/+5%" });
   }
+  activateDailyPolicy(state, market, now);
   return state;
 }
 export function setPaperConfig(state, market, now, changes) {

@@ -5,6 +5,8 @@ import { initialUsState, usAccount, usDate, usSlotFor, nextUsSlot, validFx, exec
 import { loadUsPrices, scanUs } from "./us-paper.mjs";
 import { upgradePaper, alertPaper, setPaperConfig, activeOrder, markPaper } from "./paper-model.mjs";
 import { analyticsView, recordAnalytics } from "./paper-analytics.mjs";
+import { syncDailyReviews, reviewCalendar, reviewSymbols, recordReviewEvidence, rememberSession } from "./daily-review.mjs";
+import { activateDailyPolicy } from "./strategy-policy.mjs";
 import { marketEvents, ingestEvents, eventExitReason, eventsView, EVENT_POLICY } from "./market-events.mjs";
 import { marketTransport } from "./market-transport.mjs";
 
@@ -106,6 +108,7 @@ async function runMarketCheck(env, slot) {
   return locked(env, async (row, write) => {
     const state = JSON.parse(row.state);
     upgradePaper(state, "KR", Date.now());
+    syncDailyReviews(state, "KR", Date.now(), {pastOnly:true});
     const previous = state.scans.find(item => (item.id === slot.id || (!slot.manual && slot.minute === 0 && item.id === slot.id.slice(0, -3))) && item.status !== "error");
     if (previous && slot.manual) {
       const tradeIds = new Set(previous.tradeIds ?? []);
@@ -134,6 +137,7 @@ async function runMarketCheck(env, slot) {
         if (error.status !== 401) throw error;
         result = await scan(draft, slot, marketClient(await getToken(true), { paced: true }), Date.now());
       }
+      syncDailyReviews(draft, slot.market === "US" ? "US" : "KR", Date.now());
       draft.lastError = null;
       draft.operations.lastAnalysis = Date.now();
       if (slot.event && draft.eventWatch?.pending?.id === slot.id.split(":").at(-1)) { draft.eventWatch.pending = null; draft.eventWatch.lastEventAnalysis = Date.now(); }
@@ -180,6 +184,7 @@ async function runUsSlot(env, now = Date.now(), requestId = null, eventId = null
     const row = await usRecord(env);
     const state = row ? JSON.parse(row.state) : initialUsState();
     upgradePaper(state, "US", Date.now());
+    syncDailyReviews(state, "US", Date.now(), {pastOnly:true});
     let tokenPayload = credentials.access_token;
     const writeUs = async value => {
       await env.DB.prepare("INSERT OR IGNORE INTO us_campaign(id,state) VALUES(1,?)").bind(JSON.stringify(initialUsState())).run();
@@ -229,6 +234,7 @@ async function runUsSlot(env, now = Date.now(), requestId = null, eventId = null
         draft = structuredClone(state);
         result = await scanUs(draft, slot, marketClient(await getToken(true), { paced: true }), calendar);
       }
+      syncDailyReviews(draft, slot.market === "US" ? "US" : "KR", Date.now());
       draft.lastError = null;
       draft.operations.lastAnalysis = Date.now();
       if (slot.event && draft.eventWatch?.pending?.id === slot.id.split(":").at(-1)) { draft.eventWatch.pending = null; draft.eventWatch.lastEventAnalysis = Date.now(); }
@@ -262,7 +268,7 @@ function usView(row, credentials, env) {
     batchEnabled, initial: INITIAL, limit: LIMIT, connected: Boolean(credentials?.secrets),
     canCheckIp: typeof env.connectionIp === "function", finished: usDate(now) >= END,
     totals: usAccount(state), positions: state.positions, trades: state.trades, history: state.history,
-    analytics: analyticsView(state, "US"), eventWatch: eventsView(state, now),
+    analytics: analyticsView(state, "US"), eventWatch: eventsView(state, now), reviewCalendar: reviewCalendar(state,"US",now),
     scans: state.scans.slice(-100), openingNews: state.scans.findLast(log => log.news)?.news ?? null,
     latest: state.latest, lastError: state.lastError, fx: state.fx,
     fxMode: "거래 시점 매매기준율로 원화 정산", selection: "NASDAQ·NYSE·AMEX 거래대금 상위 100종목 중 주식·ETF" };
@@ -276,6 +282,7 @@ async function runMonitor(env, now = Date.now()) {
         const usRow = market === "US" ? await usRecord(env) : null;
         const state = market === "US" ? usRow ? JSON.parse(usRow.state) : initialUsState() : JSON.parse(credentials.state);
         upgradePaper(state, market, now);
+        syncDailyReviews(state, market, now, {pastOnly:true});
         let tokenPayload = credentials.access_token;
         const persist = async value => {
           if (market === "US") {
@@ -293,6 +300,7 @@ async function runMonitor(env, now = Date.now()) {
           if (!credentials.secrets || date < START || date >= END) {
             draft.operations.status = !credentials.secrets || date < START ? "waiting" : "finished";
             if (date >= START && date < END) recordAnalytics(draft, market, now);
+            syncDailyReviews(draft,market,now);
             await persist(draft); return { status: "waiting" };
           }
           const getToken = async (force = false) => {
@@ -318,6 +326,8 @@ async function runMonitor(env, now = Date.now()) {
             if (calendar?.today?.date !== date) throw new Error("감시용 거래소 일정을 확인하지 못했습니다.");
             draft.calendar = { date, result: calendar };
           }
+          rememberSession(draft, market);
+          activateDailyPolicy(draft, market, now);
           const calendar = draft.calendar.result, regular = market === "US" ? calendar.today.regularMarket : calendar.today.integrated?.regularMarket;
           const start = Date.parse(regular?.startTime), end = Date.parse(market === "US" ? regular?.endTime : regular?.singlePriceAuctionStartTime ?? regular?.endTime);
           const open = now >= start && now < end;
@@ -339,13 +349,25 @@ async function runMonitor(env, now = Date.now()) {
             const snapshot = await (env.collectEvents ?? ((m, options) => marketEvents.collect(m, options)))(market, { closed: true });
             ingestEvents(draft, snapshot, market, Date.now());
             for (const order of draft.paperOrders.filter(activeOrder)) { order.status = "EXPIRED"; order.note = "정규장 종료"; }
-            draft.operations.status = "closed"; recordAnalytics(draft, market, now); await persist(draft); return { status: "outside" };
+            const close = Date.parse(regular?.endTime);
+            if (now >= close + 60000 && now < close + 15*60000 && draft.reviewCloseCapturedDate !== date) {
+              const symbols = reviewSymbols(draft, market, now);
+              const prices = market === "US" ? await loadUsPrices(reads, symbols) : await loadPrices(reads, symbols);
+              const closing = new Map([...prices].filter(([,q]) => q.time >= start && q.time <= close && close-q.time <= 15*60000));
+              const fx = market === "US" ? validFx(await reads.get("exchange-rate", {baseCurrency:"USD",quoteCurrency:"KRW"}),Date.now()) : {rate:1};
+              markPaper(draft,market,closing,fx,Date.now());
+              recordReviewEvidence(draft,market,closing,fx,Date.now());
+              draft.reviewCloseQuality ??= {};
+              draft.reviewCloseQuality[date]={checkedAt:Date.now(),missingSymbols:symbols.filter(symbol=>!closing.has(symbol)),pricedSymbols:closing.size};
+              draft.reviewCloseCapturedDate=date;
+            }
+            draft.operations.status = "closed"; recordAnalytics(draft, market, now); syncDailyReviews(draft,market,Date.now()); await persist(draft); return { status: "outside" };
           }
           const snapshot = await (env.collectEvents ?? (m => marketEvents.collect(m)))(market);
           const freshEvents = ingestEvents(draft, snapshot, market, Date.now());
           for (const item of freshEvents) alertPaper(draft, "event:" + item.fingerprint, item.source + " · " + item.title, now, item.direction < 0 ? "warning" : "info");
           if (draft.eventWatch.sources.some(s => s.status !== "ok")) alertPaper(draft, "event-feed-error", "일부 뉴스·공시 피드를 확인하지 못했습니다. 장중 뉴스·공시 상태를 확인해 주세요.", now);
-          const symbols = [...new Set([...draft.positions.map(p => p.symbol), ...draft.paperOrders.filter(activeOrder).map(o => o.symbol), ...(market === "US" ? ["SPY", "QQQ"] : ["069500"])])];
+          const symbols = [...new Set([...draft.positions.map(p => p.symbol), ...reviewSymbols(draft, market, now), ...draft.paperOrders.filter(activeOrder).map(o => o.symbol), ...(market === "US" ? ["SPY", "QQQ"] : ["069500"])])];
           const quotes = market === "US" ? await loadUsPrices(reads, symbols) : await loadPrices(reads, symbols);
           const fx = market === "US" ? validFx(await reads.get("exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW" }), Date.now()) : { rate: 1, from: now, until: Date.now() + 60000 };
           const books = new Map();
@@ -382,6 +404,8 @@ async function runMonitor(env, now = Date.now()) {
             draft.scans.push({ id: "monitor:" + Math.floor(now / 60000), time: finish, source: "monitor", status: "ok", tradeCount: trades.length, message: "1분 보유 감시에서 " + trades.length + "건의 모의 체결을 기록했습니다." });
             alertPaper(draft, "protective-fill:" + Math.floor(now / 60000), "보유 종목 감시에서 " + trades.length + "건의 모의 체결이 발생했습니다.", finish, "info");
           }
+          recordReviewEvidence(draft,market,quotes,fx,finish);
+          syncDailyReviews(draft,market,finish);
           const pending = draft.eventWatch.pending;
           const ready = pending && finish - draft.eventWatch.lastAnalysisAttempt >= EVENT_POLICY.reanalysisMs;
           if (ready) draft.eventWatch.lastAnalysisAttempt = finish;
@@ -392,6 +416,7 @@ async function runMonitor(env, now = Date.now()) {
           state.operations.lastMonitor = now; state.operations.status = "error";
           state.operations.lastError = error.message;
           alertPaper(state, "monitor-error", "보유 감시/API 오류: " + error.message, now, "error");
+          syncDailyReviews(state,market,Date.now());
           await persist(state); return { status: "error", message: error.message };
         }
       }));
@@ -427,7 +452,7 @@ function view(row, env) {
     history: state.history, scans: state.scans.slice(-100),
     openingNews: state.scans.findLast(item => item.news)?.news ?? null,
     latest: state.latest, lastError: state.lastError,
-    analytics: analyticsView(state, "KR"), eventWatch: eventsView(state, now),
+    analytics: analyticsView(state, "KR"), eventWatch: eventsView(state, now), reviewCalendar: reviewCalendar(state,"KR",now),
     finished: date >= END,
   };
 }
@@ -465,6 +490,14 @@ async function handler(request, env) {
   const { pathname } = new URL(request.url);
   if (pathname.startsWith("/api/")) {
     authenticate(request);
+    if (["/api/reviews", "/api/us/reviews"].includes(pathname) && request.method === "GET") {
+      const market = pathname.includes("/us/") ? "US" : "KR", row = market === "US" ? await usRecord(env) : await record(env);
+      const state = row ? JSON.parse(row.state) : market === "US" ? initialUsState() : initialState();
+      const date = new URL(request.url).searchParams.get("date");
+      if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new RequestError(400,"날짜 형식을 확인해 주세요.");
+      if (date) return json({ report: state.reviews?.[date] ?? null });
+      return json(reviewCalendar(state,market,Date.now()));
+    }
     if (pathname === "/api/health" && request.method === "GET") return json({ now: Date.now(), batchEnabled: env.MARKETLAB_BATCH === true, api: marketTransport.status(),
       ...(typeof env.runtimeStatus === "function" ? env.runtimeStatus() : { startedAt: null, lastMonitorTick: null }) });
     if (pathname === "/api/us/state" && request.method === "GET") return json(usView(await usRecord(env), await record(env), env));
@@ -541,7 +574,7 @@ async function handler(request, env) {
     return new Response(content, { headers: { ...protect, "content-type": type,
       "cache-control": pathname === "/" ? "no-store" : "public, max-age=300" } });
   }
-  if (request.method === "GET" && ["/trades", "/settings", "/us", "/us/trades"].includes(pathname)) {
+  if (request.method === "GET" && ["/trades", "/settings", "/us", "/us/trades", "/reviews", "/us/reviews"].includes(pathname)) {
     return new Response(assets["/"][1], { headers: { ...protect, "content-type": assets["/"][0], "cache-control": "no-store" } });
   }
   return new Response("페이지를 찾을 수 없습니다.", { status: 404, headers: protect });

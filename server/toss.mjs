@@ -2,6 +2,8 @@ import { account, execute, fresh, kst, marketPhase, percentage, quoteMap, rate, 
 import { collectOpeningNews, openingExitReason, openingSignal } from "./us-news.mjs";
 import { recordAnalytics } from "./paper-analytics.mjs";
 import { markPaper } from "./paper-model.mjs";
+import { strategyPolicy, activateDailyPolicy } from "./strategy-policy.mjs";
+import { recordReviewEvidence } from "./daily-review.mjs";
 import { eventSignal, eventExitReason } from "./market-events.mjs";
 import { marketTransport, MarketTransportError } from "./market-transport.mjs";
 
@@ -132,8 +134,9 @@ async function assess(client, stock, slot, phaseStart, context) {
   if (!Array.isArray(warnings) || warnings.length || !Number.isFinite(limitTime) || kst(limitTime).slice(0, 10) !== slot.date) return null;
   const spread = orderbookSpread(book, now);
   const candles = minuteStats(series, now, phaseStart, stock.q.price);
-  const minimumMomentum = stock.news.caution ? 0.45 : 0.15;
-  if (spread === null || spread > 0.65 || !candles || candles.amount < 20_000_000 || candles.momentum <= minimumMomentum) return null;
+  const policy = strategyPolicy(context.state);
+  const minimumMomentum = stock.news.caution ? Math.max(0.45, policy.minimumMomentumPct) : policy.minimumMomentumPct;
+  if (spread === null || spread > policy.maximumSpreadPct || !candles || candles.amount < 20_000_000 || candles.momentum <= minimumMomentum) return null;
   if (stock.hourly !== null && stock.hourly < 0.2) return null;
   if (context.indexChange !== null && context.indexChange < -1.5 && (stock.hourly ?? candles.momentum) < 0.65) return null;
   const upper = Number(limits.upperLimitPrice);
@@ -211,6 +214,7 @@ export async function scan(state, slot, client, now) {
   const index = indicators?.find(item => item.symbol === "KOSPI");
   const benchmark = indexCandles?.candles?.find(item => item.timestamp.slice(0, 10) < slot.date);
   const indexChange = index && benchmark ? rate(Number(index.lastPrice), Number(benchmark.closePrice)) : null;
+  activateDailyPolicy(state, "KR", now);
   const context = { ranked, indexChange, news, state, event: slot.event, eventSymbols: state.eventWatch?.pending?.symbols };
   const flow = flows?.records?.[0];
   const net = flow?.foreigner ? Number(flow.foreigner.buyAmount) - Number(flow.foreigner.sellAmount) : null;
@@ -265,6 +269,7 @@ export async function scan(state, slot, client, now) {
     ...(quotes.has("069500") ? [{ symbol: "069500", name: "KODEX 200", price: quotes.get("069500").price, time: quotes.get("069500").time, fx: 1 }] : []),
     ...(index ? [{ symbol: "KOSPI", name: "코스피", price: Number(index.lastPrice), time: Date.parse(index.timestamp), fx: 1 }] : []),
   ], baselineEquity);
+  recordReviewEvidence(state, "KR", quotes, {rate:1}, finish, candidates);
   const message = phase === "review" ? "16시 모의 계좌 평가를 기록했습니다."
     : finish >= regularEnd ? "분석 중 연속매매 시간이 끝나 모의 주문을 건너뛰었습니다."
     : trades.length ? trades.length + "건의 모의 거래를 기록했습니다."

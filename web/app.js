@@ -73,6 +73,9 @@ const isUs = () => selectedMarket === "US";
 const isDashboard = () => ["/", "/us"].includes(page);
 const dashboardPath = () => isUs() ? "/us" : "/";
 const tradesPath = () => isUs() ? "/us/trades" : "/trades";
+const reviewsPath = () => isUs() ? "/us/reviews" : "/reviews";
+let reviewMonth = null, reviewDate = null, reviewMarket = null, loadingReview = null;
+const reviewCache = new Map();
 let preview = false;
 let loaded = false;
 let failure = "";
@@ -192,6 +195,7 @@ function render() {
   }
   $(".nav a[data-icon='grid']").setAttribute("href", dashboardPath());
   $(".nav a[data-icon='list']").setAttribute("href", tradesPath());
+  $(".nav a[data-icon='calendar']").setAttribute("href", reviewsPath());
   $$(".nav a").forEach(link => {
     if (link.getAttribute("href") === page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
   });
@@ -265,6 +269,7 @@ function render() {
       + openingNewsBrief(log.news) + '</details>' : '') + "</div></div>").join("") :
     emptyImage("timer", "분석 기록이 없습니다", "API를 연결한 뒤 시간별 결과를 확인할 수 있습니다.");
   renderAnalytics(s);
+  renderReviewCalendar(s);
   draw();
 }
 
@@ -276,9 +281,9 @@ function selectPage(url, push = false) {
     preview = false; announced = null; manualRequestId = null; modelFormVersion = null; lastAlertId = null; setText("#manual-message", "");
     Promise.resolve(refreshTask).finally(() => refresh());
   }
-  page = ["/trades", "/settings", "/us", "/us/trades"].includes(url) ? url : "/";
+  page = ["/trades", "/settings", "/us", "/us/trades", "/reviews", "/us/reviews"].includes(url) ? url : "/";
   if (push && location.pathname !== page) history.pushState({}, "", page);
-  const views = { "/": "dashboard", "/us": "dashboard", "/trades": "trades", "/us/trades": "trades", "/settings": "settings" };
+  const views = { "/": "dashboard", "/us": "dashboard", "/trades": "trades", "/us/trades": "trades", "/settings": "settings", "/reviews": "reviews", "/us/reviews": "reviews" };
   for (const name of new Set(Object.values(views))) $("#" + name).hidden = name !== views[page];
   $$(".nav a").forEach(link => {
     if (link.getAttribute("href") === page) link.setAttribute("aria-current", "page");
@@ -287,13 +292,15 @@ function selectPage(url, push = false) {
   const titles = {
     "/": ["모의투자 대시보드", "토스증권 시세로 진행하는 한 달간의 자동 모의투자입니다."],
     "/trades": ["거래내역", "체결 금액과 판단 근거, 거래 직후의 손익을 확인하세요."],
+    "/reviews": ["매매 복기", "장 마감 복기와 다음 거래일 전략 변경 근거를 확인하세요."],
+    "/us/reviews": ["미국장 매매 복기", "미국 현지 거래일 기준의 일별 손익과 복기입니다."],
     "/settings": ["설정", "개인 API 키를 연결하고 모의투자 조건을 확인하세요."],
     "/us": ["미국장 모의투자", "미국 정규장에 맞춰 자동 분석하고, 거래 시점 환율로 원화 손익을 기록합니다."],
     "/us/trades": ["미국장 거래내역", "달러 체결가·적용 환율·원화 정산액과 매매 근거를 확인하세요."],
   };
   setText("#title", titles[page][0]);
   setText("#subtitle", titles[page][1]);
-  $("#dashboard-actions").hidden = page === "/settings";
+  $("#dashboard-actions").hidden = page === "/settings" || page.endsWith("/reviews");
   if (page === "/settings") {
     preview = false;
     $("#api-form").reset();
@@ -640,6 +647,47 @@ refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 25000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
+function renderReviewCalendar(s) {
+  const calendar=s.reviewCalendar;
+  if(!calendar){$("#review-calendar").textContent="복기 자료를 불러오는 중입니다.";return;}
+  if(reviewMarket!==selectedMarket){reviewMarket=selectedMarket;reviewMonth=calendar.today.slice(0,7);reviewDate=[...calendar.days].reverse().find(d=>d.status==="final")?.date??calendar.today;loadingReview=null;}
+  const [year,month]=reviewMonth.split('-').map(Number),count=new Date(Date.UTC(year,month,0)).getUTCDate(),offset=new Date(Date.UTC(year,month-1,1)).getUTCDay();
+  setText("#review-month-title",year+"년 "+month+"월");
+  const policy=calendar.policy;
+  setText("#review-policy","현재 진입 상승세 "+policy.minimumMomentumPct.toFixed(2)+"% 이상 · 최대 호가 간격 "+policy.maximumSpreadPct.toFixed(2)+"% · "+(calendar.pending?calendar.pending.sourceDate+" 복기 보완을 다음 실제 거래일에 적용 예정":"마감 후 매일 보완 여부 검토 · 근거 부족 시 유지"));
+  const byDate=new Map(calendar.days.map(d=>[d.date,d]));
+  let html=['일','월','화','수','목','금','토'].map(d=>'<div class="calendar-weekday">'+d+'</div>').join('')+'<div class="calendar-gap"></div>'.repeat(offset);
+  for(let day=1;day<=count;day++){
+    const date=reviewMonth+'-'+String(day).padStart(2,'0'),row=byDate.get(date),available=!!row;
+    html+='<button type="button" class="calendar-day '+(reviewDate===date?'selected ':'')+(row?.status==='final'?'final':'')+'" data-review-date="'+date+'" '+(!available?'disabled ':'')+'aria-pressed="'+(reviewDate===date)+'" aria-label="'+date+(row?' 평가손익 '+(row.equityPnl==null?'미확인':signed(row.equityPnl)):' 기록 없음')+'"><span>'+day+'</span>'+(row?'<strong class="'+tone(row.equityPnl??0)+'">'+(row.equityPnl==null?'—':signed(row.equityPnl))+'</strong><small>'+({final:'복기 완료',pending:'마감 후 작성',unavailable:'자료 확인 대기'}[row.status])+(row.changed?' · 보완 예약':'')+'</small>':'<small>기록 없음</small>')+'</button>';
+  }
+  $("#review-calendar").innerHTML=html;
+  const row=byDate.get(reviewDate),key=selectedMarket+':'+reviewDate;
+  if(!row||row.status!=='final'){$("#review-detail").innerHTML='<h2>'+safe(reviewDate??'날짜 선택')+'</h2><p class="news-summary">'+(row?.status==='pending'?'장이 끝나고 마감 평가가 저장되면 복기를 자동 작성합니다. 진행 중인 손익은 확정 결과가 아닙니다.':'이 날짜의 완성된 복기 자료가 없습니다.')+'</p>';return;}
+  if(reviewCache.has(key)){renderReviewReport(reviewCache.get(key),calendar);return;}
+  $("#review-detail").innerHTML='<h2>'+safe(reviewDate)+'</h2><p>복기 내용을 불러오는 중입니다.</p>';
+  if(loadingReview===key||!page.endsWith('/reviews'))return;
+  loadingReview=key;
+  request((isUs()?'/api/us/reviews':'/api/reviews')+'?date='+encodeURIComponent(reviewDate)).then(result=>{
+    reviewCache.set(key,result.report);if(key===selectedMarket+':'+reviewDate)renderReviewReport(result.report,data.reviewCalendar);
+  }).catch(error=>{if(key===selectedMarket+':'+reviewDate)$("#review-detail").innerHTML='<p class="loss">'+safe(error.message)+'</p>';}).finally(()=>{if(loadingReview===key)loadingReview=null;});
+}
+function renderReviewReport(report,calendar) {
+  if(!report){$("#review-detail").innerHTML='<p>보고서가 아직 작성되지 않았습니다.</p>';return;}
+  const root=$("#review-detail"),reportKey=selectedMarket+":"+report.date;
+  const openDetails=new Set(root.dataset.reportKey===reportKey?[...root.querySelectorAll("details[open]")].map(d=>d.dataset.reviewTrade):[]);root.dataset.reportKey=reportKey;
+  const reviewTable=(heads,rows)=>table(heads,rows.map(row=>"<tr>"+row.map(value=>"<td>"+safe(value)+"</td>").join("")+"</tr>"));
+  const s=report.summary,adaptive=report.adaptive,applied=calendar.applied?.find(r=>r.reviewDate===report.date);
+  const status=applied?'적용 완료':calendar.pending?.sourceDate===report.date?'다음 거래일 적용 예약':adaptive.changed?'당시 보완안 기록':'기존 전략 유지';
+  const stats=[['평가손익',s.equityPnl==null?'확인 불가':signed(s.equityPnl)],['실현손익',signed(s.realized)],['명시 비용',money(s.explicitCosts)],['체결 수',s.fillCount+'건 (매수 '+s.buyCount+' / 매도 '+s.sellCount+')']];
+  const decisions=report.decisions.map(t=>'<details class="review-decision" data-review-trade="'+safe(t.id)+'"'+(openDetails.has(String(t.id))?' open':'')+'><summary>'+stamp(t.time)+' · '+safe(t.name)+' · '+(t.side==='BUY'?'매수':'매도')+' '+n.format(t.quantity)+'주 · '+money(t.amount)+'</summary><p><strong>당시 판단</strong> '+safe(t.reason)+'</p><p class="news-meta">전략 '+safe(t.strategyVersion)+' · '+safe({event:'뉴스·공시 반응',monitor:'보유 감시',manual:'수동 실행',batch:'정기 분석'}[t.source]??t.source)+'</p>'+(t.orderEvidence?'<p class="news-meta">주문 기준가 '+(report.market==='US'?dollars(t.orderEvidence.reference):money(t.orderEvidence.reference))+' · 지정 범위 '+(report.market==='US'?dollars(t.orderEvidence.limitPrice):money(t.orderEvidence.limitPrice))+' · 주문 상태 '+safe(t.orderEvidence.status)+'</p>':'<p class="news-meta">이전 거래에는 주문 시점 상세 정보가 없습니다.</p>')+(t.side==='SELL'?'<p>거래 실현손익 <strong class="'+tone(t.realized)+'">'+signed(t.realized)+'</strong></p>':'')+'<p><strong>다른 선택 검토</strong> '+(t.alternative?'5분 뒤 관측가 '+(report.market==='US'?dollars(t.alternative.price):money(t.alternative.price))+' · 기다린 가격차 참고액 '+signed(t.alternative.grossDifferenceKrw)+'</p><p class="news-meta">'+safe(t.alternative.text):safe(t.alternativeNote))+'</p></details>').join('');
+  $("#review-detail").innerHTML='<div class="card-heading"><div><h2>'+safe(report.date)+' 매매 복기</h2><p>'+(report.market==='US'?'미국 현지 거래일':'한국 거래일')+' · 작성 '+stamp(report.createdAt)+'</p></div><span class="plain-badge">'+status+'</span></div><div class="stat-grid">'+stats.map(([k,v])=>'<div class="stat-cell"><span>'+k+'</span><strong>'+safe(v)+'</strong></div>').join('')+'</div><p class="news-summary">'+safe(report.overview)+'</p><h3>판단과 결과</h3>'+(decisions||'<p>당일 체결이 없습니다.</p>')+'<h3>종합 복기와 대안</h3>'+reviewTable(['매도 사유','체결 수','실현손익'],Object.entries(report.exitReasons).map(([reason,row])=>[reason,String(row.count),signed(row.realized)]))+'<ul>'+report.lessons.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul><p>'+safe(report.alternatives)+'</p><p>분석 성공 기록 '+report.analysis.success+'회 · 실패 '+report.analysis.failed+'회</p><h3>다음 거래일 전략 보완 · '+status+'</h3>'+reviewTable(['항목','검토 전','보완안'],[['진입 상승세',adaptive.before.minimumMomentumPct.toFixed(2)+'%',adaptive.after.minimumMomentumPct.toFixed(2)+'%'],['최대 호가 간격',adaptive.before.maximumSpreadPct.toFixed(2)+'%',adaptive.after.maximumSpreadPct.toFixed(2)+'%']])+'<ul>'+adaptive.reasons.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul><p class="news-meta">완결 매매 '+adaptive.sample.completedTrips+'회 · '+adaptive.sample.distinctDays+'개 거래일 표본. '+safe(adaptive.limits)+'</p>'+(report.quality.length?'<h3>자료의 한계</h3><ul>'+report.quality.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul>':'')+'<p class="news-meta">'+safe(report.method)+'</p>';
+}
+document.addEventListener('click',event=>{
+  const dateButton=event.target.closest('[data-review-date]'),monthButton=event.target.closest('[data-month-shift]');
+  if(dateButton&&!dateButton.disabled){reviewDate=dateButton.dataset.reviewDate;renderReviewCalendar(data);}
+  if(monthButton){const [y,m]=reviewMonth.split('-').map(Number),date=new Date(Date.UTC(y,m-1+Number(monthButton.dataset.monthShift),1));reviewMonth=date.toISOString().slice(0,7);reviewDate=data.reviewCalendar?.days.filter(d=>d.date.startsWith(reviewMonth)).at(-1)?.date??reviewMonth+'-01';renderReviewCalendar(data);}
+});
 function renderEvents(watch) {
   const status = {ok:"정상",closed:"장외 15분 확인",degraded:"일부 수집 장애",unavailable:"수집 확인 불가",waiting:"첫 감시 대기"};
   setText("#event-health", status[watch?.status] ?? "첫 감시 대기");
