@@ -1,4 +1,5 @@
 import {marketDate,strategyPolicy} from './strategy-policy.mjs';
+import { archivePatternEvidence } from './chart-patterns.mjs';
 const sum=(rows,fn)=>rows.reduce((n,r)=>n+(Number(fn(r))||0),0);
 const finite=value=>Number.isFinite(value)?value:null;
 export function rememberSession(state,market){
@@ -13,10 +14,11 @@ export function recordReviewEvidence(state,market,quotes,fx,now,candidates=null)
   state.reviewEvidence??={};const evidence=state.reviewEvidence[date]??={points:[],analyses:[]};
   const wanted=new Set([...reviewSymbols(state,market,now),...(candidates??[]).slice(0,5).map(c=>c.symbol)]);
   for(const symbol of wanted){const q=quotes.get(symbol);if(!q||!(q.price>0)||q.time<session.start||q.time>session.end||q.time>now+3000||now-q.time>90000)continue;
-    const point={symbol,time:q.time,price:q.price,fx:market==='US'?fx?.rate??null:1},bucket=Math.floor(q.time/60000);
+    const point={symbol,time:q.time,observedAt:now,price:q.price,fx:market==='US'?fx?.rate??null:1},bucket=Math.floor(q.time/60000);
     const index=evidence.points.findLastIndex(p=>p.symbol===symbol&&Math.floor(p.time/60000)===bucket);
     if(index<0)evidence.points.push(point);else if(evidence.points[index].time<q.time)evidence.points[index]=point;
   }
+  archivePatternEvidence(state,now,candidates??[]);
   if(candidates)evidence.analyses.push({time:now,policy:strategyPolicy(state),candidates:candidates.slice(0,5).map(c=>({symbol:c.symbol,name:c.name,score:finite(c.score),reason:c.reason??null}))});
   evidence.points=evidence.points.slice(-15000);evidence.analyses=evidence.analyses.slice(-120);
   const keys=Object.keys(state.reviewEvidence).sort();for(const key of keys.slice(0,-3))delete state.reviewEvidence[key];

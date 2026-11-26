@@ -1,3 +1,4 @@
+import { initPatterns } from './patterns.js?v=20261126-patterns1';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const paths = {
@@ -196,6 +197,7 @@ function render() {
   $(".nav a[data-icon='grid']").setAttribute("href", dashboardPath());
   $(".nav a[data-icon='list']").setAttribute("href", tradesPath());
   $(".nav a[data-icon='calendar']").setAttribute("href", reviewsPath());
+  $(".nav a[data-icon='chart']").setAttribute("href", isUs() ? "/us/patterns" : "/patterns");
   $$(".nav a").forEach(link => {
     if (link.getAttribute("href") === page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
   });
@@ -270,6 +272,7 @@ function render() {
     emptyImage("timer", "분석 기록이 없습니다", "API를 연결한 뒤 시간별 결과를 확인할 수 있습니다.");
   renderAnalytics(s);
   renderReviewCalendar(s);
+  patternPanel.update(page, selectedMarket, data.trades);
   draw();
 }
 
@@ -281,15 +284,17 @@ function selectPage(url, push = false) {
     preview = false; announced = null; manualRequestId = null; modelFormVersion = null; lastAlertId = null; setText("#manual-message", "");
     Promise.resolve(refreshTask).finally(() => refresh());
   }
-  page = ["/trades", "/settings", "/us", "/us/trades", "/reviews", "/us/reviews"].includes(url) ? url : "/";
+  page = ["/trades", "/settings", "/us", "/us/trades", "/reviews", "/us/reviews", "/patterns", "/us/patterns"].includes(url) ? url : "/";
   if (push && location.pathname !== page) history.pushState({}, "", page);
-  const views = { "/": "dashboard", "/us": "dashboard", "/trades": "trades", "/us/trades": "trades", "/settings": "settings", "/reviews": "reviews", "/us/reviews": "reviews" };
+  const views = { "/": "dashboard", "/us": "dashboard", "/trades": "trades", "/us/trades": "trades", "/settings": "settings", "/reviews": "reviews", "/us/reviews": "reviews", "/patterns": "patterns", "/us/patterns": "patterns" };
   for (const name of new Set(Object.values(views))) $("#" + name).hidden = name !== views[page];
   $$(".nav a").forEach(link => {
     if (link.getAttribute("href") === page) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   });
   const titles = {
+    "/patterns": ["차트패턴 분석", "국내장 거래에 패턴 조건을 적용한 가상 결과를 비교하세요."],
+    "/us/patterns": ["미국장 차트패턴 분석", "미국장 거래의 수량·비용·환율을 유지한 가상 비교입니다."],
     "/": ["모의투자 대시보드", "토스증권 시세로 진행하는 한 달간의 자동 모의투자입니다."],
     "/trades": ["거래내역", "체결 금액과 판단 근거, 거래 직후의 손익을 확인하세요."],
     "/reviews": ["매매 복기", "장 마감 복기와 다음 거래일 전략 변경 근거를 확인하세요."],
@@ -300,7 +305,7 @@ function selectPage(url, push = false) {
   };
   setText("#title", titles[page][0]);
   setText("#subtitle", titles[page][1]);
-  $("#dashboard-actions").hidden = page === "/settings" || page.endsWith("/reviews");
+  $("#dashboard-actions").hidden = page === "/settings" || page.endsWith("/reviews") || page.endsWith("/patterns");
   if (page === "/settings") {
     preview = false;
     $("#api-form").reset();
@@ -642,6 +647,7 @@ $("#model-form").addEventListener("submit", async event => {
   } catch (error) { setText("#model-result", error.message); }
   finally { button.disabled = false; }
 });
+const patternPanel = initPatterns(request);
 selectPage(location.pathname);
 refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 25000);

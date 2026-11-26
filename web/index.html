@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#f6f7fc">
   <title>마켓랩 | 국내·미국장 모의투자</title>
   <link rel="icon" href="/mark.svg">
-  <link rel="stylesheet" href="/app.css?v=20261126-limits1">
-  <script type="module" src="/app.js?v=20261126-limits1"></script>
+  <link rel="stylesheet" href="/app.css?v=20261126-patterns1">
+  <script type="module" src="/app.js?v=20261126-patterns1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -18,6 +18,7 @@
         <a href="/" data-page data-icon="grid">대시보드</a>
         <a href="/trades" data-page data-icon="list">거래내역</a>
         <a href="/reviews" data-page data-icon="calendar">매매 복기</a>
+        <a href="/patterns" data-page data-icon="chart">차트패턴 분석</a>
         <a href="/settings" data-page data-icon="settings">설정</a>
       </nav>
       <div class="nav-end"><a href="/account" class="text-link">내 계정</a><span id="connection" class="pill"><i></i> 연결 확인 중</span></div>
@@ -154,6 +155,31 @@
     <section id="reviews" class="view" hidden aria-label="매매 복기">
       <article class="card data-card"><div class="card-heading"><div><h2>일별 매매 달력</h2><p>평가손익은 전 거래 기록일 대비 자산 변화 · 실현손익은 매도 체결 손익</p></div><div class="review-month-controls"><button type="button" class="button secondary" data-month-shift="-1" aria-label="이전 달">←</button><strong id="review-month-title"></strong><button type="button" class="button secondary" data-month-shift="1" aria-label="다음 달">→</button></div></div><p id="review-policy" class="news-meta"></p><div id="review-calendar" class="review-calendar"></div></article>
       <article class="card data-card" id="review-detail" aria-live="polite"><h2>날짜를 선택하세요</h2></article>
+    </section>
+
+    <section id="patterns" class="view" hidden aria-label="차트패턴 분석">
+      <article class="card data-card pattern-intro">
+        <div class="card-heading"><div><h2>같은 거래에 패턴 조건을 적용했다면</h2><p>별도 가상 비교 · 주문과 일별 전략 보완에는 반영되지 않습니다.</p></div><span class="plain-badge">분석 전용</span></div>
+        <p class="news-summary">최초 매수 직전의 가격 구조로 매수 유지·회피를 판단합니다. 유지한 거래는 원래 수량·추가 체결·매도 시점·비용·환율을 그대로 사용하고, 회피한 거래의 가상 손익은 0원으로 계산합니다.</p>
+        <form id="pattern-form" class="pattern-controls">
+          <label>비교 조건<select name="mode"><option value="avoid-bearish">하락 패턴이면 매수 회피</option><option value="require-bullish">상승 패턴이 있을 때만 매수</option></select></label>
+          <label>패턴<select name="pattern"><option value="all">전체 패턴</option><option value="doubleBottom">이중바닥</option><option value="doubleTop">이중천장</option><option value="inverseHead">역머리어깨</option><option value="head">머리어깨</option><option value="triangleUp">삼각수렴 상방 돌파</option><option value="triangleDown">삼각수렴 하방 돌파</option><option value="fallingWedge">하락쐐기 상방 돌파</option><option value="risingWedge">상승쐐기 하방 돌파</option></select></label>
+          <label>가격 유사 허용 오차<select name="tolerance"><option value="0.4">0.4%</option><option value="0.8" selected>0.8%</option><option value="1.2">1.2%</option></select></label>
+          <label>분석 구간<select name="lookback"><option value="120">진입 전 최대 120분</option><option value="60">진입 전 최대 60분</option></select></label>
+          <button type="submit" class="button primary">분석하기</button>
+          <button type="button" id="pattern-example" class="button secondary" aria-pressed="false">분석 예시 보기</button>
+        </form>
+        <p id="pattern-status" class="news-meta" role="status" aria-live="polite"></p>
+      </article>
+      <div id="pattern-summary" class="pattern-metrics"></div>
+      <article class="card data-card"><div class="card-heading"><div><h2>거래별 비교</h2><p>최초 매수부터 잔량이 모두 매도될 때까지 한 묶음 · 진행 중인 거래 제외</p></div></div><div id="pattern-results"></div></article>
+      <article class="card data-card"><div class="card-heading"><div><h2>패턴별 결과</h2><p>한 거래에 여러 패턴이 있으면 중복 집계됩니다. 아래 금액을 합산하지 마세요.</p></div></div><div id="pattern-breakdown"></div></article>
+      <article class="card data-card pattern-method"><details><summary>판별 규칙과 비교 범위</summary>
+        <p>1분봉 종가 또는 저장된 관측가를 사용합니다. 봉 시작 시각에 1분을 더해 완성 시점을 판단하며 진입 이후의 봉은 사용하지 않습니다. 거래 당시 보관한 자료가 없으면 남아 있는 과거 관측가로 재구성하고 출처를 표시합니다.</p>
+        <p>가격 표본 20개 이상, 마지막 자료는 진입 전 3분 이내, 관측 공백은 3분 이하가 필요합니다. 고점·저점은 좌우 2개 표본으로 확인합니다. 이중형은 1% 이상 깊이·최소 6개 표본 간격, 머리어깨형은 어깨보다 1% 이상 돌출된 머리를 사용합니다. 삼각형·쐐기는 고점·저점 각 3개와 폭 20% 이상 축소를 확인합니다. 직전 표본에서 경계 안에 있다가 마지막 표본이 경계 밖 0.1%를 넘는 신규 돌파만 인정합니다.</p>
+        <p>상승 확인 조건은 상승 신호가 있고 하락 신호가 없을 때 유지합니다. 하락 회피 조건은 하락 신호가 하나라도 있으면 회피합니다. 자료 부족은 무신호·손익 0원으로 처리하지 않고 비교에서 제외합니다.</p>
+        <p>가상 결과는 완결 거래의 저장된 실현손익을 유지하거나 거래 전체를 회피한 비교입니다. 신규 진입·목표가·손절가 변경이나 회피한 현금의 재투자, 포트폴리오 자산 추이, 미체결 주문의 대안을 재현하지 않습니다. 과거 비용 상세가 없는 거래는 원장에 기록된 손익 기준임을 표시합니다. 일부 부분 체결을 독립 표본으로 세지 않으며, 조건을 바꿔 얻은 결과가 미래 성과를 입증하지 않습니다.</p>
+      </details></article>
     </section>
 
     <section id="settings" class="view" hidden aria-label="설정">

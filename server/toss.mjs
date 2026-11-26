@@ -4,6 +4,7 @@ import { recordAnalytics } from "./paper-analytics.mjs";
 import { markPaper } from "./paper-model.mjs";
 import { strategyPolicy, activateDailyPolicy } from "./strategy-policy.mjs";
 import { recordReviewEvidence } from "./daily-review.mjs";
+import { candleEvidence } from "./chart-patterns.mjs";
 import { eventSignal, eventExitReason } from "./market-events.mjs";
 import { marketTransport, MarketTransportError } from "./market-transport.mjs";
 
@@ -163,7 +164,7 @@ async function assess(client, stock, slot, phaseStart, context) {
     stock.news.reason ? stock.news.reason + " 반영" : null,
   ].filter(Boolean).join(" · ");
   return {
-    ...stock, reason, momentum: candles.momentum,
+    ...stock, reason, momentum: candles.momentum, patternEvidence: candleEvidence(series, now),
     score: stock.score + weight(candles.momentum, 0, 3) - spread
       + Math.sign(institutional ?? 0) * 0.2 + Math.sign(programNet ?? 0) * 0.1,
     validPrice: price => price > lower && price < upper && Math.abs(rate(price, stock.q.price)) <= 0.8,

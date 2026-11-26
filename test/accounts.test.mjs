@@ -26,7 +26,7 @@ function fixture(t) {
 }
 test('sessions gate every account route, forged identities and cross-origin login cannot bypass authentication', async t => {
   const { call } = fixture(t);
-  for (const path of ['/api/state','/api/us/state','/api/quotes','/api/us/quotes','/api/health','/api/reviews','/api/us/reviews']) assert.equal((await call(path, undefined, '', { 'oai-authenticated-user-id': 'owner' })).status, 401);
+  for (const path of ['/api/state','/api/us/state','/api/quotes','/api/us/quotes','/api/health','/api/reviews','/api/us/reviews','/api/patterns','/api/us/patterns']) assert.equal((await call(path, undefined, '', { 'oai-authenticated-user-id': 'owner' })).status, 401);
   assert.equal((await call('/')).status, 303);
   assert.equal((await call('/login')).status, 200);
   assert.equal((await call('/api/auth/login', { username: 'marketlab', password }, '', { origin: 'https://evil.example' })).status, 403);
@@ -44,6 +44,14 @@ test('owner data survives migration; invited users have separate KR/US balances,
   assert.equal((await (await call('/api/reviews?date=2026-11-25', undefined, owner)).json()).report.overview, 'owner-private-review');
   assert.equal((await (await call('/api/reviews?date=2026-11-25', undefined, member.cookie, { 'oai-authenticated-user-id': 'owner' })).json()).report, null);
   assert.equal((await call('/api/reviews?date=invalid', undefined, owner)).status, 400);
+  for (const path of ['/api/patterns','/api/us/patterns']) {
+    const before = await (await call(path.includes('/us/')?'/api/us/state':'/api/state', undefined, owner)).json();
+    const report = await (await call(path, undefined, member.cookie, { 'oai-authenticated-user-id': 'owner' })).json();
+    assert.equal(report.summary.completed,0); assert.equal(report.summary.simulated,null);
+    assert.equal((await call(path+'?mode=execute', undefined, owner)).status,400);
+    const after = await (await call(path.includes('/us/')?'/api/us/state':'/api/state', undefined, owner)).json();
+    assert.deepEqual(after.trades,before.trades); assert.deepEqual(after.totals,before.totals);
+  }
   assert.equal(ownerState.totals.cash, 7654321); assert.equal(ownerState.trades[0].id, 'historic-owner');
   for(const path of ['/api/state','/api/us/state']) { const s = await (await call(path, undefined, member.cookie, { 'oai-authenticated-user-id': 'owner' })).json(); assert.equal(s.totals.cash, 10000000); assert.equal(s.trades.length,0); assert.equal(s.connected,false); }
   assert.equal((await call('/api/auth/invites', {}, member.cookie)).status,403);

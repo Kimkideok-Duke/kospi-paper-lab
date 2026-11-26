@@ -9,6 +9,7 @@ import { syncDailyReviews, reviewCalendar, reviewSymbols, recordReviewEvidence, 
 import { activateDailyPolicy } from "./strategy-policy.mjs";
 import { marketEvents, ingestEvents, eventExitReason, eventsView, EVENT_POLICY } from "./market-events.mjs";
 import { marketTransport } from "./market-transport.mjs";
+import { patternReport } from "./chart-patterns.mjs";
 
 const encode = new TextEncoder();
 const decode = new TextDecoder();
@@ -490,6 +491,15 @@ async function handler(request, env) {
   const { pathname } = new URL(request.url);
   if (pathname.startsWith("/api/")) {
     authenticate(request);
+    if (["/api/patterns", "/api/us/patterns"].includes(pathname) && request.method === "GET") {
+      const market = pathname.includes("/us/") ? "US" : "KR", row = market === "US" ? await usRecord(env) : await record(env);
+      const state = row ? JSON.parse(row.state) : market === "US" ? initialUsState() : initialState();
+      const query = new URL(request.url).searchParams;
+      const options = { mode: query.get("mode") ?? "avoid-bearish", pattern: query.get("pattern") ?? "all",
+        tolerance: Number(query.get("tolerance") ?? .8), lookback: Number(query.get("lookback") ?? 120) };
+      try { return json(patternReport(state, market, options)); }
+      catch { throw new RequestError(400, "차트패턴 분석 조건을 확인해 주세요."); }
+    }
     if (["/api/reviews", "/api/us/reviews"].includes(pathname) && request.method === "GET") {
       const market = pathname.includes("/us/") ? "US" : "KR", row = market === "US" ? await usRecord(env) : await record(env);
       const state = row ? JSON.parse(row.state) : market === "US" ? initialUsState() : initialState();
@@ -574,7 +584,7 @@ async function handler(request, env) {
     return new Response(content, { headers: { ...protect, "content-type": type,
       "cache-control": pathname === "/" ? "no-store" : "public, max-age=300" } });
   }
-  if (request.method === "GET" && ["/trades", "/settings", "/us", "/us/trades", "/reviews", "/us/reviews"].includes(pathname)) {
+  if (request.method === "GET" && ["/trades", "/settings", "/us", "/us/trades", "/reviews", "/us/reviews", "/patterns", "/us/patterns"].includes(pathname)) {
     return new Response(assets["/"][1], { headers: { ...protect, "content-type": assets["/"][0], "cache-control": "no-store" } });
   }
   return new Response("페이지를 찾을 수 없습니다.", { status: 404, headers: protect });
