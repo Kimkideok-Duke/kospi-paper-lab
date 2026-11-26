@@ -43,6 +43,7 @@ await Promise.all([
   copy("server/stock-review.mjs", "dist/server/stock-review.mjs"),
   copy("server/closing-audit.mjs", "dist/server/closing-audit.mjs"),
   copy("server/chart-patterns.mjs", "dist/server/chart-patterns.mjs"),
+  copy("server/chart-candles.mjs", "dist/server/chart-candles.mjs"),
   copy("server/trade-chart.mjs", "dist/server/trade-chart.mjs"),
   copy("server/strategy-policy.mjs", "dist/server/strategy-policy.mjs"),
   copy(".openai/hosting.json", "dist/.openai/hosting.json"),

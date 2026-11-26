@@ -31,3 +31,5 @@
 확인한 원문: [공식 개요](https://openapi.tossinvest.com/openapi-docs/overview.md), [시세](https://developers.tossinvest.com/docs/market-data), [웹소켓](https://developers.tossinvest.com/docs/connection), [FAQ](https://openapi.tossinvest.com/openapi-docs/faq.md).
 
 2026-11-26 사용자 적용 요청에 따라 보유·기존 대기 주문 감시는 5초로 변경했다. 매도 종목 복기·벤치마크 추가 시세는 1분 간격, 신규 탐색은 10분 간격이다. 화면 보유 시세도 5초마다 서버에 저장된 값만 읽으며 토스증권 호출은 추가하지 않는다. 일반 상태 전체 갱신은 25초를 유지한다. 호출 중첩 방지와 오류 시 10~60초 감속을 적용했다.
+
+2026-11-26 차트 팝업 개선: 팝업을 열 때 candles 1m을 최대 200봉씩 nextBefore로 조회한다. MARKET_DATA_CHART 공통 대기열, 사용자별 동일 범위 60초 캐시·진행 요청 공유·최대 12페이지를 적용한다. 보유 감시의 현재가/호가 요청 주기는 유지하고 저장 시세의 5초 보존 자체에는 새 API 호출이 없다. 팝업은 기존 토큰만 재사용하며 만료 토큰의 별도 발급을 하지 않는다.

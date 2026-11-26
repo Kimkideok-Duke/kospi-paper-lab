@@ -24,7 +24,14 @@ test('missing paths and missing USD fill prices remain unknown rather than inven
   const r=tradeChart({trades:[sell(1,start,{priceUsd:undefined})]},'US','1',start);
   assert.equal(r.points.length,0);assert.equal(r.trades[0].price,null);assert.match(r.note,/부족/);assert.equal(r.open,null);
 });
-test('chart observations persist after review eviction, deduplicate minutes and stop collecting a closed trade after 30 minutes',()=>{
+
+test('five-second observations within one minute keep separate timestamps without duplicating unchanged quote times',()=>{
+  const state={trades:[buy(1)]};
+  for(const offset of [0,1000,5000,10000,10000,15000])recordTradeCharts(state,'KR',new Map([['TEST',{time:start+offset,price:100+offset/1000}]]),start+offset);
+  assert.deepEqual(state.tradeCharts['1'].points.map(p=>p.time-start),[1000,5000,10000,15000]);
+  assert.ok(state.tradeCharts['1'].points.every(p=>p.source==='monitor-5s'));
+});
+test('chart observations persist after review eviction, deduplicate five-second buckets and stop collecting a closed trade after 30 minutes',()=>{
   const s={trades:[buy(1),sell(2)]},before=structuredClone(s.trades);
   for(const offset of [0,1000,60000,360000])recordTradeCharts(s,'KR',new Map([['TEST',{price:100+offset/60000,time:start+offset}]]),start+offset);
   const saved=s.tradeCharts['1'];assert.equal(saved.points.length,3);assert.equal(saved.points[0].time,start+1000);
@@ -36,7 +43,7 @@ test('future, stale, pre-entry and invalid quotes are never retained; long paths
   const s={trades:[buy(1)]};
   for(const q of [{price:100,time:start+1},{price:100,time:start-1},{price:NaN,time:start}])recordTradeCharts(s,'KR',new Map([['TEST',q]]),start);
   assert.equal(s.tradeCharts,undefined);
-  const points=Array.from({length:3000},(_,i)=>({time:start+i*60000,price:100}));s.tradeCharts={'1':{symbol:'TEST',points,sampled:false}};
-  const now=start+3000*60000;recordTradeCharts(s,'KR',new Map([['TEST',{price:101,time:now}]]),now);
-  assert.ok(s.tradeCharts['1'].points.length<3000);assert.equal(s.tradeCharts['1'].sampled,true);assert.equal(s.tradeCharts['1'].points[0].time,start);assert.equal(s.tradeCharts['1'].points.at(-1).time,now);
+  const points=Array.from({length:40000},(_,i)=>({time:start+i*60000,price:100}));s.tradeCharts={'1':{symbol:'TEST',points,sampled:false}};
+  const now=start+40000*60000;recordTradeCharts(s,'KR',new Map([['TEST',{price:101,time:now}]]),now);
+  assert.ok(s.tradeCharts['1'].points.length<40000);assert.equal(s.tradeCharts['1'].sampled,true);assert.equal(s.tradeCharts['1'].points[0].time,start);assert.equal(s.tradeCharts['1'].points.at(-1).time,now);
 });

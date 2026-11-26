@@ -19,12 +19,12 @@ export function recordTradeCharts(state, market, quotes, now) {
     if (!validPoint(q) || q.time < cycle.entry.time || q.time > now || now - q.time > 90_000) continue;
     state.tradeCharts ??= {};
     const saved = state.tradeCharts[cycle.entry.id] ??= { symbol: cycle.entry.symbol, points: [], sampled: false };
-    const point = { time: q.time, price: q.price };
+    const point = { time: q.time, price: q.price, source: "monitor-5s" };
     const last = saved.points.at(-1);
     if (last && last.time >= point.time) continue;
-    if (last && Math.floor(last.time / MINUTE) === Math.floor(point.time / MINUTE)) saved.points[saved.points.length - 1] = point;
+    if (last && Math.floor(last.time / 5000) === Math.floor(point.time / 5000)) saved.points[saved.points.length - 1] = point;
     else saved.points.push(point);
-    if (saved.points.length > 3000) {
+    if (saved.points.length > 40000) {
       saved.points = saved.points.filter((_, i, a) => i % 2 === 0 || i === a.length - 1);
       saved.sampled = true;
     }
@@ -49,7 +49,7 @@ export function tradeChart(state, market, id, now = Date.now(), date = null) {
   const map = new Map();
   for (const p of candidates) if (validPoint(p) && (date ? marketDate(p.time,market)===date && p.time<=now : p.time >= from && p.time <= until)) {
     // Prefer the observations retained for this cycle over an older candle close at the same instant.
-    if (!map.has(p.time)) map.set(p.time, { time: p.time, price: p.price });
+    if (!map.has(p.time)) map.set(p.time, { time: p.time, price: p.price, source: p.source??"saved" });
   }
   const points = [...map.values()].sort((a, b) => a.time - b.time);
   let gaps = 0;

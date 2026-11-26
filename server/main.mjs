@@ -11,6 +11,7 @@ import { marketEvents, ingestEvents, eventExitReason, eventsView, EVENT_POLICY }
 import { marketTransport } from "./market-transport.mjs";
 import { patternReport } from "./chart-patterns.mjs";
 import { stockReview } from "./stock-review.mjs";
+import { loadChartCandles } from "./chart-candles.mjs";
 import { tradeChart } from "./trade-chart.mjs";
 import { collectClosingAudits, closingReview } from "./closing-audit.mjs";
 
@@ -507,6 +508,18 @@ async function handler(request, env) {
       if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new RequestError(400, "날짜 형식을 확인해 주세요.");
       const result = tradeChart(row ? JSON.parse(row.state) : { trades: [] }, market, id, Date.now(), date);
       if (!result) throw new RequestError(404, "해당 거래를 찾을 수 없습니다.");
+      const credentials=market==='KR'?row:await record(env);
+      result.candles=[];result.candleStatus='unavailable';
+      try {
+        // Reuse the running app's token. Popup reads never issue/revoke a token or lock the trading ledger.
+        const token=credentials?.secrets&&credentials?.access_token?await openSecret(env,credentials.access_token,'toss:token'):null;
+        if(token?.value&&token.expires>Date.now()+10000){
+          const series=await loadChartCandles(env.DB,marketClient(token.value),result);
+          result.candles=series.candles;result.candleStatus=series.status;result.candleCheckedAt=series.checkedAt;
+        }
+      } catch { /* Preserve the saved chart when API/authentication is unavailable. */ }
+      result.note=result.candles.length?'토스 API 1분봉 OHLCV(수정주가 미적용) · 봉 시각은 종료 시각입니다. 보라색 선은 저장 관측가이며 5초 관측과 과거 분 단위 관측을 포함할 수 있습니다.':result.note+' API 1분봉을 확인하지 못해 저장 자료로 표시합니다.';
+      if(result.candles.length&&result.candleStatus!=='complete')result.note+=' 일부 분봉은 확인되지 않았습니다.';
       return json(result);
     }
     if (["/api/patterns", "/api/us/patterns"].includes(pathname) && request.method === "GET") {

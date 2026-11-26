@@ -1,5 +1,5 @@
 import { initPatterns } from './patterns.js?v=20261126-patterns1';
-import { initTradeChart } from './trade-chart.js?v=20261126-tooltip2';
+import { initTradeChart } from './trade-chart.js?v=20261126-candles1';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const paths = {
