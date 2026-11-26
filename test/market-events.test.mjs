@@ -134,5 +134,5 @@ test('server monitor reacts to a new filing before the next ten-minute slot, rec
   const view=await response.json();assert.ok(view.eventWatch.sources.length);assert.equal(view.eventWatch.reactions.length,1);assert.ok(!JSON.stringify(view).includes('fake-events-test-token'));
   clock=Date.parse('2026-11-26T15:31:30+09:00');await runMonitor(env,Date.now());
   const reviewResponse=await app.fetch(new Request('http://localhost/api/reviews?date=2026-11-26',{headers:{'oai-authenticated-user-id':'test'}}),env);
-  const review=await reviewResponse.json();assert.equal(review.report.status,'final');assert.equal(review.report.decisions.length,1);assert.ok(review.report.quality.some(v=>v.includes('마감 시세')));
+  const review=await reviewResponse.json();assert.equal(review.report.status,'final');assert.equal(review.report.decisions.length,1);assert.ok(['partial','waiting'].includes(review.report.closingAudit.status));assert.ok(review.report.quality.some(v=>v.includes('종가')));
 });

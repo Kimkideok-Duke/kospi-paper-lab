@@ -1,4 +1,5 @@
 import { initPatterns } from './patterns.js?v=20261126-patterns1';
+import { initTradeChart } from './trade-chart.js?v=20261126-tradechart2';
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const paths = {
@@ -138,8 +139,8 @@ function tradeList(trades, emptyText) {
   if (!trades.length) return emptyImage("list", emptyText, "기록된 거래의 금액과 손익이 여기에 표시됩니다.");
   return table(["체결 시각", "종목", "구분", "거래 금액", "매매 이유", "거래 실현손익", "총 평가자산"], trades.map(t => {
     const buy = t.side === "BUY";
-    return "<tr><td>" + stamp(t.time) + (t.source === "manual" ? '<div class="small">수동 실행</div>' : t.source === "event" ? '<div class="small">뉴스·공시 반응</div>' : t.source === "monitor" ? '<div class="small">보유 감시 체결</div>' : '') +
-      '</td><td class="symbol"><strong>' + safe(t.name) + '</strong><span class="small">' +
+    return '<tr class="trade-chart-row" data-trade-chart="' + safe(t.id) + '"><td>' + stamp(t.time) + (t.source === "manual" ? '<div class="small">수동 실행</div>' : t.source === "event" ? '<div class="small">뉴스·공시 반응</div>' : t.source === "monitor" ? '<div class="small">보유 감시 체결</div>' : '') +
+      '</td><td class="symbol"><button type="button" class="trade-chart-link" data-trade-chart="' + safe(t.id) + '" aria-label="' + safe(t.name) + ' ' + (buy ? '매수' : '매도') + ' 차트 보기">' + safe(t.name) + ' <span aria-hidden="true">차트</span></button><span class="small">' +
       safe(t.symbol) + " · " + safe(t.type) + '</span></td><td><span class="side ' + (buy ? "buy" : "sell") + '">' +
       (buy ? "매수" : "매도") + '</span></td><td><strong>' + money(t.amount) + '</strong><div class="small">' +
       n.format(t.quantity) + "주 × " + (t.market === "US" ? dollars(t.priceUsd) + " · 환율 " + fixed.format(t.fxRate) + "원" : money(t.price)) +
@@ -186,7 +187,7 @@ function render() {
   setText("#market-footer", us ? "토스증권 Open API · 미국 주식·ETF 모의투자 · 실주문 없음" : "토스증권 Open API · 코스피 · ETF · 모의투자");
   setText("#conditions-period", us ? "2026.11.25 — 2026.12.24 · 미국 현지 거래일" : "2026.11.25 — 2026.12.24 · 한국 시간");
   setText("#conditions-universe", us ? "미국 거래대금 상위 100 중 주식·ETF" : "토스증권 코스피·ETF");
-  setText("#conditions-schedule", us ? "개장 +3분 첫 분석, 이후 개장 기준 10분 · 보유 감시 1분" : "09:03, 이후 10분 간격 · 보유 감시 1분");
+  setText("#conditions-schedule", us ? "개장 +3분 첫 분석, 이후 개장 기준 10분 · 보유 감시 5초" : "09:03, 이후 10분 간격 · 보유 감시 5초");
   $("#us-session").hidden = !us;
   if (us) {
     const regular = s.session?.regularMarket;
@@ -358,14 +359,14 @@ function renderAnalytics(s) {
   const staleHeartbeat = health?.batchEnabled && health.lastMonitorTick && Date.now() - health.lastMonitorTick > 120000;
   setText("#server-health", failure ? "서버 연결 실패" : health ? staleHeartbeat ? "서버 감시 지연" : "서버 응답 정상 · " + stamp(health.now) : "서버 상태 확인 중");
   const ops = a.operations ?? {};
-  setText("#monitor-health", "분석 10분 · 보유 감시 1분 · " + ({ closed: "정규장 외 대기", monitoring: "감시 중", waiting: "API 연결 대기", error: "감시 오류", stale: "시세 지연", finished: "기간 종료" }[ops.status] ?? "초기화 대기") + (ops.lastMonitor ? " · " + stamp(ops.lastMonitor) : ""));
+  setText("#monitor-health", "분석 10분 · 보유 감시 5초 · " + ({ closed: "정규장 외 대기", monitoring: "감시 중", waiting: "API 연결 대기", error: "감시 오류", stale: "시세 지연", finished: "기간 종료" }[ops.status] ?? "초기화 대기") + (ops.lastMonitor ? " · " + stamp(ops.lastMonitor) : ""));
   $("#server-health").className = failure || staleHeartbeat ? "loss" : "";
   $("#monitor-health").className = ["error", "stale"].includes(ops.status) ? "loss" : "";
   const profile = model?.config ?? { commissionBps: isUs() ? 10 : 1.5, taxBps: isUs() ? 0 : 20, fxSpreadBps: isUs() ? 10 : 0, participationPct: 10, limitBps: 20, ttlSeconds: 300 };
   const feeFormat = value => new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 4 }).format(value / 100);
   setText("#conditions-costs", "수수료 " + feeFormat(profile.commissionBps) + "% · 주식 매도세 " + feeFormat(profile.taxBps) + "%");
   setText("#conditions-rules", (isUs() ? "미국 현지 정규장만 운영하며, 매 거래 시점 환율로 원화 정산합니다. " : "국내 정규장 연속매매 시간에 운영합니다. ")
-    + "첫 신규 분석은 개장 3분 뒤, 이후 개장 기준 10분 간격, 보유 종목은 1분 간격으로 감시합니다. 최신 호가 잔량의 " + profile.participationPct + "% 이내에서 모의 체결하며, 즉시 체결 우선 주문은 " + profile.ttlSeconds + "초 뒤 만료됩니다. 일반 진입은 기준가보다 " + feeFormat(profile.limitBps) + "% 낮은 지정가로 최대 15분 대기하고, 강한 상승세(최근 분봉 +1% 이상)·뉴스 반응에는 즉시 체결을 우선합니다. 보유분은 +5% 목표가에 당일 매도 주문을 미리 두며 손절·악재·추세 약화 시 취소하고 보호 매도를 우선합니다. 최대 5종목·종목별 비중 상한 없이 가용 현금 내 주문, 주가 기준 −2.5% 손절·+5% 익절을 적용합니다. 감시 간격·가격 급변·잔량 부족으로 손절 가격의 체결은 보장하지 않습니다.");
+    + "첫 신규 분석은 개장 3분 뒤, 이후 개장 기준 10분 간격, 보유 종목은 5초 간격으로 감시합니다. 최신 호가 잔량의 " + profile.participationPct + "% 이내에서 모의 체결하며, 즉시 체결 우선 주문은 " + profile.ttlSeconds + "초 뒤 만료됩니다. 일반 진입은 기준가보다 " + feeFormat(profile.limitBps) + "% 낮은 지정가로 최대 15분 대기하고, 강한 상승세(최근 분봉 +1% 이상)·뉴스 반응에는 즉시 체결을 우선합니다. 보유분은 +5% 목표가에 당일 매도 주문을 미리 두며 손절·악재·추세 약화 시 취소하고 보호 매도를 우선합니다. 최대 5종목·종목별 비중 상한 없이 가용 현금 내 주문, 주가 기준 −2.5% 손절·+5% 익절을 적용합니다. 감시 간격·가격 급변·잔량 부족으로 손절 가격의 체결은 보장하지 않습니다.");
   const version = selectedMarket + ":" + (model?.version ?? "default");
   if (modelFormVersion !== version && !$("#model-form").contains(document.activeElement)) {
     for (const [key, value] of Object.entries(profile)) $("#model-form").elements.namedItem(key).value = ["commissionBps", "taxBps", "fxSpreadBps", "limitBps"].includes(key) ? value / 100 : value;
@@ -648,9 +649,21 @@ $("#model-form").addEventListener("submit", async event => {
   finally { button.disabled = false; }
 });
 const patternPanel = initPatterns(request);
+initTradeChart({ request, market: () => selectedMarket, preview: () => preview, state: current });
 selectPage(location.pathname);
 refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 25000);
+let quoteRefreshRunning = false;
+setInterval(async () => {
+  if (quoteRefreshRunning || refreshTask || document.hidden || preview || !isDashboard() || !loaded || !data.connected || !data.positions.length) return;
+  quoteRefreshRunning = true;
+  const selectedAtStart = selectedMarket;
+  try {
+    const result = await request('/api/quotes');
+    if (selectedAtStart === selectedMarket && !preview) { tickQuotes = result.quotes; render(); }
+  } catch { /* The normal state refresh reports connection failures. */ }
+  finally { quoteRefreshRunning = false; }
+}, 5000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
 function renderReviewCalendar(s) {
@@ -670,13 +683,25 @@ function renderReviewCalendar(s) {
   $("#review-calendar").innerHTML=html;
   const row=byDate.get(reviewDate),key=selectedMarket+':'+reviewDate;
   if(!row||row.status!=='final'){$("#review-detail").innerHTML='<h2>'+safe(reviewDate??'날짜 선택')+'</h2><p class="news-summary">'+(row?.status==='pending'?'장이 끝나고 마감 평가가 저장되면 복기를 자동 작성합니다. 진행 중인 손익은 확정 결과가 아닙니다.':'이 날짜의 완성된 복기 자료가 없습니다.')+'</p>';return;}
-  if(reviewCache.has(key)){renderReviewReport(reviewCache.get(key),calendar);return;}
+  const cacheKey=key+':'+(row.closingRevision??'legacy');
+  if(reviewCache.has(cacheKey)){renderReviewReport(reviewCache.get(cacheKey),calendar);return;}
   $("#review-detail").innerHTML='<h2>'+safe(reviewDate)+'</h2><p>복기 내용을 불러오는 중입니다.</p>';
-  if(loadingReview===key||!page.endsWith('/reviews'))return;
-  loadingReview=key;
+  if(loadingReview===cacheKey||!page.endsWith('/reviews'))return;
+  loadingReview=cacheKey;
   request((isUs()?'/api/us/reviews':'/api/reviews')+'?date='+encodeURIComponent(reviewDate)).then(result=>{
-    reviewCache.set(key,result.report);if(key===selectedMarket+':'+reviewDate)renderReviewReport(result.report,data.reviewCalendar);
-  }).catch(error=>{if(key===selectedMarket+':'+reviewDate)$("#review-detail").innerHTML='<p class="loss">'+safe(error.message)+'</p>';}).finally(()=>{if(loadingReview===key)loadingReview=null;});
+    reviewCache.set(cacheKey,result.report);if(key===selectedMarket+':'+reviewDate)renderReviewReport(result.report,data.reviewCalendar);
+  }).catch(error=>{if(key===selectedMarket+':'+reviewDate)$("#review-detail").innerHTML='<p class="loss">'+safe(error.message)+'</p>';}).finally(()=>{if(loadingReview===cacheKey)loadingReview=null;});
+}
+function renderClosingAudit(report) {
+  const audit=report.closingAudit;
+  if(!audit)return '<h3>종가 별도 확인</h3><p class="news-meta">별도 조회 작업을 준비하고 있습니다.</p>';
+  const targets=audit.targets??[],confirmed=targets.filter(t=>audit.records[t.symbol]?.status==='confirmed').length;
+  const basis=report.market==='KR'?'KRX·NXT 통합 일봉 종가 · 시간외장 포함':'미국 정규장 공식 일봉 종가';
+  const state={waiting:'마감 확정 대기',checking:'확인 중',partial:'미확인 종목 재조회 중',complete:'전체 종가 확인 완료'}[audit.status]??'확인 대기';
+  const rows=targets.map(t=>{const r=audit.records[t.symbol];return '<tr><td>'+safe(t.name??t.symbol)+'<span class="small"> '+safe(t.symbol)+'</span></td><td>'+({confirmed:'확인 완료',retry:'재조회 대기'}[r?.status]??'조회 대기')+'</td><td>'+(r?.price?(report.market==='US'?dollars(r.price):money(r.price)):'—')+'</td><td>'+(r?.checkedAt?stamp(r.checkedAt):'—')+'</td><td>'+safe(r?.reason??'')+'</td></tr>';});
+  const value=audit.valuationStatus==='complete'?'<p>확인 종가 기준 평가금액 <strong>'+money(audit.equity)+'</strong></p>':'';
+  const fx=report.market==='US'&&audit.fx?'<p class="news-meta">환율은 정규장 마감 이전 마지막 저장값 '+fixed.format(audit.fx.rate)+'원 ('+stamp(audit.fx.time)+')을 고정했습니다.</p>':'';
+  return '<section class="closing-audit"><div class="card-heading"><div><h3>전체 종목 종가 확인</h3><p>'+basis+'</p></div><span class="plain-badge">'+state+' · '+confirmed+'/'+targets.length+'종목</span></div><p class="news-meta">해당 거래일의 보유·거래 종목 전체 · 확인 시작 '+(audit.eligibleAt?stamp(audit.eligibleAt):'장 일정 확인 후')+' · API 한도를 지키며 미확인 종목을 재조회합니다.</p>'+value+fx+'<details><summary>종목별 종가와 확인 상태</summary>'+table(['종목','상태','확인 종가','조회 시각','확인 사항'],rows)+'</details></section>';
 }
 function renderReviewReport(report,calendar) {
   if(!report){$("#review-detail").innerHTML='<p>보고서가 아직 작성되지 않았습니다.</p>';return;}
@@ -685,9 +710,10 @@ function renderReviewReport(report,calendar) {
   const reviewTable=(heads,rows)=>table(heads,rows.map(row=>"<tr>"+row.map(value=>"<td>"+safe(value)+"</td>").join("")+"</tr>"));
   const s=report.summary,adaptive=report.adaptive,applied=calendar.applied?.find(r=>r.reviewDate===report.date);
   const status=applied?'적용 완료':calendar.pending?.sourceDate===report.date?'다음 거래일 적용 예약':adaptive.changed?'당시 보완안 기록':'기존 전략 유지';
-  const stats=[['평가손익',s.equityPnl==null?'확인 불가':signed(s.equityPnl)],['실현손익',signed(s.realized)],['명시 비용',money(s.explicitCosts)],['체결 수',s.fillCount+'건 (매수 '+s.buyCount+' / 매도 '+s.sellCount+')']];
+  const equityLabel=report.closingAudit?.valuationStatus==='complete'?(report.market==='KR'?'통합종가 평가손익':'정규장 종가 평가손익'):'평가손익';
+  const stats=[[equityLabel,s.equityPnl==null?'확인 불가':signed(s.equityPnl)],['실현손익',signed(s.realized)],['명시 비용',money(s.explicitCosts)],['체결 수',s.fillCount+'건 (매수 '+s.buyCount+' / 매도 '+s.sellCount+')']];
   const decisions=report.decisions.map(t=>'<details class="review-decision" data-review-trade="'+safe(t.id)+'"'+(openDetails.has(String(t.id))?' open':'')+'><summary>'+stamp(t.time)+' · '+safe(t.name)+' · '+(t.side==='BUY'?'매수':'매도')+' '+n.format(t.quantity)+'주 · '+money(t.amount)+'</summary><p><strong>당시 판단</strong> '+safe(t.reason)+'</p><p class="news-meta">전략 '+safe(t.strategyVersion)+' · '+safe({event:'뉴스·공시 반응',monitor:'보유 감시',manual:'수동 실행',batch:'정기 분석'}[t.source]??t.source)+'</p>'+(t.orderEvidence?'<p class="news-meta">주문 기준가 '+(report.market==='US'?dollars(t.orderEvidence.reference):money(t.orderEvidence.reference))+' · 지정 범위 '+(report.market==='US'?dollars(t.orderEvidence.limitPrice):money(t.orderEvidence.limitPrice))+' · 주문 상태 '+safe(t.orderEvidence.status)+'</p>':'<p class="news-meta">이전 거래에는 주문 시점 상세 정보가 없습니다.</p>')+(t.side==='SELL'?'<p>거래 실현손익 <strong class="'+tone(t.realized)+'">'+signed(t.realized)+'</strong></p>':'')+'<p><strong>다른 선택 검토</strong> '+(t.alternative?'5분 뒤 관측가 '+(report.market==='US'?dollars(t.alternative.price):money(t.alternative.price))+' · 기다린 가격차 참고액 '+signed(t.alternative.grossDifferenceKrw)+'</p><p class="news-meta">'+safe(t.alternative.text):safe(t.alternativeNote))+'</p></details>').join('');
-  $("#review-detail").innerHTML='<div class="card-heading"><div><h2>'+safe(report.date)+' 매매 복기</h2><p>'+(report.market==='US'?'미국 현지 거래일':'한국 거래일')+' · 작성 '+stamp(report.createdAt)+'</p></div><span class="plain-badge">'+status+'</span></div><div class="stat-grid">'+stats.map(([k,v])=>'<div class="stat-cell"><span>'+k+'</span><strong>'+safe(v)+'</strong></div>').join('')+'</div><p class="news-summary">'+safe(report.overview)+'</p><h3>판단과 결과</h3>'+(decisions||'<p>당일 체결이 없습니다.</p>')+'<h3>종합 복기와 대안</h3>'+reviewTable(['매도 사유','체결 수','실현손익'],Object.entries(report.exitReasons).map(([reason,row])=>[reason,String(row.count),signed(row.realized)]))+'<ul>'+report.lessons.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul><p>'+safe(report.alternatives)+'</p><p>분석 성공 기록 '+report.analysis.success+'회 · 실패 '+report.analysis.failed+'회</p><h3>다음 거래일 전략 보완 · '+status+'</h3>'+reviewTable(['항목','검토 전','보완안'],[['진입 상승세',adaptive.before.minimumMomentumPct.toFixed(2)+'%',adaptive.after.minimumMomentumPct.toFixed(2)+'%'],['최대 호가 간격',adaptive.before.maximumSpreadPct.toFixed(2)+'%',adaptive.after.maximumSpreadPct.toFixed(2)+'%']])+'<ul>'+adaptive.reasons.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul><p class="news-meta">완결 매매 '+adaptive.sample.completedTrips+'회 · '+adaptive.sample.distinctDays+'개 거래일 표본. '+safe(adaptive.limits)+'</p>'+(report.quality.length?'<h3>자료의 한계</h3><ul>'+report.quality.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul>':'')+'<p class="news-meta">'+safe(report.method)+'</p>';
+  $("#review-detail").innerHTML='<div class="card-heading"><div><h2>'+safe(report.date)+' 매매 복기</h2><p>'+(report.market==='US'?'미국 현지 거래일':'한국 거래일')+' · 작성 '+stamp(report.createdAt)+'</p></div><span class="plain-badge">'+status+'</span></div><div class="stat-grid">'+stats.map(([k,v])=>'<div class="stat-cell"><span>'+k+'</span><strong>'+safe(v)+'</strong></div>').join('')+'</div><p class="news-summary">'+safe(report.overview)+'</p>'+renderClosingAudit(report)+'<h3>판단과 결과</h3>'+(decisions||'<p>당일 체결이 없습니다.</p>')+'<h3>종합 복기와 대안</h3>'+reviewTable(['매도 사유','체결 수','실현손익'],Object.entries(report.exitReasons).map(([reason,row])=>[reason,String(row.count),signed(row.realized)]))+'<ul>'+report.lessons.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul><p>'+safe(report.alternatives)+'</p><p>분석 성공 기록 '+report.analysis.success+'회 · 실패 '+report.analysis.failed+'회</p><h3>다음 거래일 전략 보완 · '+status+'</h3>'+reviewTable(['항목','검토 전','보완안'],[['진입 상승세',adaptive.before.minimumMomentumPct.toFixed(2)+'%',adaptive.after.minimumMomentumPct.toFixed(2)+'%'],['최대 호가 간격',adaptive.before.maximumSpreadPct.toFixed(2)+'%',adaptive.after.maximumSpreadPct.toFixed(2)+'%']])+'<ul>'+adaptive.reasons.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul><p class="news-meta">완결 매매 '+adaptive.sample.completedTrips+'회 · '+adaptive.sample.distinctDays+'개 거래일 표본. '+safe(adaptive.limits)+'</p>'+(report.quality.length?'<h3>자료의 한계</h3><ul>'+report.quality.map(v=>'<li>'+safe(v)+'</li>').join('')+'</ul>':'')+'<p class="news-meta">'+safe(report.method)+'</p>';
 }
 document.addEventListener('click',event=>{
   const dateButton=event.target.closest('[data-review-date]'),monthButton=event.target.closest('[data-month-shift]');

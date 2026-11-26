@@ -9,6 +9,8 @@ const resources = {
   "/": ["text/html; charset=utf-8", "index.html"],
   "/app.js": ["text/javascript; charset=utf-8", "app.js"],
   "/patterns.js": ["text/javascript; charset=utf-8", "patterns.js"],
+  "/trade-chart.js": ["text/javascript; charset=utf-8", "trade-chart.js"],
+  "/trade-chart-layout.mjs": ["text/javascript; charset=utf-8", "trade-chart-layout.mjs"],
   "/pattern-engine.mjs": ["text/javascript; charset=utf-8", "../server/chart-patterns.mjs"],
   "/app.css": ["text/css; charset=utf-8", "app.css"],
   "/mark.svg": ["image/svg+xml", "mark.svg"],
@@ -38,7 +40,9 @@ await Promise.all([
   copy("server/market-transport.mjs", "dist/server/market-transport.mjs"),
   copy("server/market-events.mjs", "dist/server/market-events.mjs"),
   copy("server/daily-review.mjs", "dist/server/daily-review.mjs"),
+  copy("server/closing-audit.mjs", "dist/server/closing-audit.mjs"),
   copy("server/chart-patterns.mjs", "dist/server/chart-patterns.mjs"),
+  copy("server/trade-chart.mjs", "dist/server/trade-chart.mjs"),
   copy("server/strategy-policy.mjs", "dist/server/strategy-policy.mjs"),
   copy(".openai/hosting.json", "dist/.openai/hosting.json"),
 ]);

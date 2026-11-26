@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createLocalHost } from "../server/local-host.mjs";
 import { startBatch } from "../server/batch.mjs";
 import { startUsBatch } from "../server/us-batch.mjs";
-import { startMonitorBatch } from "../server/monitor-batch.mjs";
+import { startMonitorBatch, monitorStatus, MONITOR_INTERVAL_MS } from "../server/monitor-batch.mjs";
 import "./build.mjs";
 
 const { default: app, runSlot, runUsSlot, runMonitor } = await import("../dist/server/index.js");
@@ -50,7 +50,7 @@ async function connectionIp() {
   return ip;
 }
 
-const runtime = { startedAt: Date.now(), lastMonitorTick: null };
+const runtime = { startedAt: Date.now(), lastMonitorTick: null, monitorIntervalMs: MONITOR_INTERVAL_MS };
 const env = { DB, MARKETLAB_KEY: readFileSync(keyFile, "utf8"), MARKETLAB_BATCH: withSchedule, connectionIp, runtimeStatus: () => ({ ...runtime }) };
 
 const host = createLocalHost({ root, masterKey: readFileSync(keyFile, "utf8"), baseEnv: env, app });
@@ -88,7 +88,7 @@ server.once("listening", () => {
     server.once("close", stopBatch);
     const stopUsBatch = startUsBatch(time => host.runAll(runUsSlot, time));
     server.once("close", stopUsBatch);
-    const stopMonitor = startMonitorBatch(time => host.runAll(runMonitor, time), time => { runtime.lastMonitorTick = time; });
+    const stopMonitor = startMonitorBatch(time => host.runAll(async (userEnv, at) => monitorStatus(await runMonitor(userEnv, at)), time), time => { runtime.lastMonitorTick = time; });
     server.once("close", stopMonitor);
   }
 });

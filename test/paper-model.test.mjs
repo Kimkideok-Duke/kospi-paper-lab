@@ -136,9 +136,9 @@ test("monitor timer runs independently, reports heartbeat and stops", async t =>
   const stop = startMonitorBatch(async time => calls.push(time), time => beats.push(time));
   t.mock.timers.tick(5000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.length, 1); assert.deepEqual(calls, beats);
-  t.mock.timers.tick(25000); await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(5000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.length, 2);
-  t.mock.timers.tick(60000); await new Promise(resolve => setImmediate(resolve)); assert.equal(calls.length, 3);
+  t.mock.timers.tick(5000); await new Promise(resolve => setImmediate(resolve)); assert.equal(calls.length, 3);
   stop(); t.mock.timers.tick(60000); await new Promise(resolve => setImmediate(resolve)); assert.equal(calls.length, 3);
 });
 test("monitor initializes both markets without credentials; config changes enforce auth and origin", async t => {

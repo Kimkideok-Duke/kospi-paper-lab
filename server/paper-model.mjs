@@ -8,6 +8,7 @@ export function paperTotal(state, market) {
   return state.cash + value;
 }
 export function upgradePaper(state, market, now) {
+  const hadModel = Boolean(state.paperModel);
   state.paperOrders ??= []; state.alerts ??= []; state.versions ??= []; state.daily ??= [];
   state.costs ??= { commission: 0, transactionTax: 0, fxSpread: 0, slippage: 0 };
   state.liquidityUsage ??= {};
@@ -17,9 +18,14 @@ export function upgradePaper(state, market, now) {
     for (const order of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) { order.status = "CANCELED"; order.note = "전략 버전 변경: 다음 분석에서 새 규칙으로 평가"; }
     state.paperModel = { enabled: true, code: MODEL_VERSION, version: MODEL_VERSION + ":" + (state.versions.length + 1), config, appliedAt: now };
     state.versions.push({ id: state.paperModel.version, time: now, baseline: paperTotal(state, market),
-      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 1분 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · 눌림 지정가/목표가 사전 주문 · −2.5%/+5%" });
+      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 5초 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · 눌림 지정가/목표가 사전 주문 · −2.5%/+5%" });
   }
   activateDailyPolicy(state, market, now);
+  if (state.monitorPolicy?.intervalMs !== 5000) {
+    state.monitorPolicy = { intervalMs: 5000, appliedAt: now };
+    if (hadModel) state.versions.push({ id: 'monitor-5s:' + (state.versions.length + 1), time: now, baseline: paperTotal(state, market),
+      tradeCount: state.trades.length, config: { ...state.paperModel.config }, rules: '보유·기존 미체결 주문 감시 5초 · 신규 분석 10분 유지 · 오류 시 10~60초 대기 · 기존 주문·체결·설정 보존' });
+  }
   return state;
 }
 export function setPaperConfig(state, market, now, changes) {

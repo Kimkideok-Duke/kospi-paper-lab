@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#f6f7fc">
   <title>마켓랩 | 국내·미국장 모의투자</title>
   <link rel="icon" href="/mark.svg">
-  <link rel="stylesheet" href="/app.css?v=20261126-patterns1">
-  <script type="module" src="/app.js?v=20261126-patterns1"></script>
+  <link rel="stylesheet" href="/app.css?v=20261126-closeaudit">
+  <script type="module" src="/app.js?v=20261126-closeaudit"></script>
 </head>
 <body>
   <header class="topbar">
@@ -102,7 +102,7 @@
       </article>
 
       <article class="card data-card event-card">
-        <div class="card-heading"><div><h2>장중 뉴스·공시 감시</h2><p>뉴스 2분 · 공시 1분 · 보유 반응 판단 1분</p></div><span id="event-health" class="plain-badge">확인 대기</span></div>
+        <div class="card-heading"><div><h2>장중 뉴스·공시 감시</h2><p>뉴스 2분 · 공시 1분 · 보유 반응 판단 5초</p></div><span id="event-health" class="plain-badge">확인 대기</span></div>
         <div id="event-watch" aria-live="polite"></div>
       </article>
 
@@ -245,5 +245,15 @@
 
     <footer class="footer"><div class="foot-brand"><span data-icon="brand"></span>마켓랩</div><span id="market-footer">토스증권 Open API · 코스피 · ETF · 모의투자</span><span>원화(KRW) · 한국 시간(KST)</span></footer>
   </main>
+  <dialog id="trade-chart-dialog" class="trade-chart-dialog" aria-labelledby="trade-chart-title">
+    <header class="trade-chart-heading"><div><h2 id="trade-chart-title">거래 차트</h2><p id="trade-chart-subtitle"></p></div><button type="button" id="trade-chart-close" class="button secondary" aria-label="차트 팝업 닫기">닫기</button></header>
+    <p id="trade-chart-status" role="status" aria-live="polite"></p>
+    <div id="trade-chart-content" hidden>
+      <div class="trade-chart-legend"><span><i class="quote-line"></i>저장 가격</span><span><i class="quote-gap"></i>미관측 구간</span><span><i class="buy-point"></i>매수</span><span><i class="sell-point"></i>매도</span><span>원형 테두리: 선택한 체결 · ×숫자: 묶은 체결 수</span></div>
+      <div class="trade-chart-plot"><canvas id="trade-chart-canvas" role="img" aria-label="종목 가격과 매수·매도 체결 지점"></canvas></div>
+      <p id="trade-chart-hover" class="trade-chart-hover" aria-live="off">차트에 마우스를 올리거나 체결 표식을 클릭해 상세 내용을 확인하세요.</p>
+      <div id="trade-chart-detail"></div><div id="trade-chart-fills"></div>
+    </div>
+  </dialog>
 </body>
 </html>

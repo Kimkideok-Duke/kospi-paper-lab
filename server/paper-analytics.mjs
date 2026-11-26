@@ -6,6 +6,9 @@ const day = (now, market) => {
 export function recordAnalytics(state, market, now, benchmarks = [], baselineEquity = null) {
   upgradePaper(state, market, now);
   const total = paperTotal(state, market), date = day(now, market);
+  const peak = state.operations.equityPeak ?? Math.max(10_000_000, ...state.history.map(p => p.total).filter(Number.isFinite));
+  state.operations.equityPeak = Math.max(peak, total);
+  state.operations.maxDrawdownPct = Math.max(state.operations.maxDrawdownPct ?? 0, (state.operations.equityPeak - total) / state.operations.equityPeak * 100);
   let row = state.daily.find(item => item.date === date);
   if (!row) { row = { date, open: baselineEquity ?? total, high: Math.max(baselineEquity ?? total, total), low: Math.min(baselineEquity ?? total, total), close: total, time: now }; state.daily.push(row); }
   row.high = Math.max(row.high, total); row.low = Math.min(row.low, total); row.close = total; row.time = now;
@@ -32,6 +35,7 @@ export function analyticsView(state, market) {
     .filter(p => Number.isFinite(p.total)).sort((a, b) => a.time - b.time);
   let peak = 10_000_000, maxDrawdownPct = 0;
   for (const point of [...history, { total }]) { peak = Math.max(peak, point.total); if (peak > 0) maxDrawdownPct = Math.max(maxDrawdownPct, (peak - point.total) / peak * 100); }
+  maxDrawdownPct = Math.max(maxDrawdownPct, state.operations?.maxDrawdownPct ?? 0);
   const sells = state.trades.filter(t => t.side === "SELL" && Number.isFinite(t.realized));
   const wins = sells.filter(t => t.realized > 0), losses = sells.filter(t => t.realized < 0);
   const profit = wins.reduce((sum, t) => sum + t.realized, 0), loss = -losses.reduce((sum, t) => sum + t.realized, 0);
