@@ -22,3 +22,13 @@
 팝업의 분봉 조회는 기존 공통 MARKET_DATA_CHART 대기열을 사용한다. 사용자 DB별 메모리 캐시는 최대 32개 범위·60초이며, 진행 중 동일 요청을 공유한다. 부분 실패 캐시는 15초다. 5초 보유 감시에서 분봉을 반복 호출하지 않는다. 기존 유효 토큰만 사용하고 팝업 때문에 토큰을 발급/취소하거나 매매 원장을 잠그지 않는다. 토큰 만료 시 기존 감시의 갱신을 기다리고 저장 자료를 표시한다. 원장·현금·전략·실제 체결·원본 복기를 쓰지 않으며 실제 주문 API는 연결하지 않는다. 인증 없는 조회나 다른 사용자의 거래 ID로는 접근할 수 없다.
 
 공식 근거(2026-11-26 확인): [REST OpenAPI](https://openapi.tossinvest.com/openapi-docs/latest/openapi.json), [캔들 FAQ](https://openapi.tossinvest.com/openapi-docs/faq.md).
+
+## 2026-11-26 기성 차트 엔진 적용
+
+사용자가 실제 화면의 가독성과 직접 그리는 방식을 지적해 수동 Canvas 렌더러를 제거했다. TradingView Lightweight Charts 5.3.0의 공식 npm 배포 standalone ESM을 SRI 검증 후 web/vendor에 포함했다. Apache-2.0 LICENSE와 공식 태그의 NOTICE, 화면의 저작권 고지·TradingView 링크를 유지한다. 외부 스크립트 실행이나 CSP 완화 없이 로컬 자산으로 제공한다.
+
+기성 엔진이 캔들·가격축·시간축·거래량·크로스헤어·휠 확대·드래그·터치 확대를 담당한다. 선택 체결 전 30분/후 90분을 기본 표시하고 전체 기간, 선택 매매 이동과 1/5/15분 집계를 제공한다. API의 1분봉 종료 시각은 실제 봉 시작 시각으로 변환하고 시가/고가/저가/종가·거래량을 집계한다. 없는 봉을 생성하지 않는다. 실제 매매 표식은 해당 봉의 시작 시각에 정렬하고, 가격은 실제 체결가(묶음은 수량 가중평균)를 사용한다. 툴팁·상세에는 원래 초 단위 시각과 가격을 보존한다. 같은 방향·같은 봉의 부분 체결을 묶고 선택 체결은 별도로 강조해 과도한 화살표와 중복 시간축을 방지한다.
+
+완성된 외부 차트를 그대로 삽입하는 TradingView 위젯도 조사했다. 공식 위젯용 아시아 시장 목록에 KRX가 없고, 위젯에는 사용자 자료를 넣는 API가 없다. 국내·미국장과 사용자 체결 표시를 함께 유지하기 위해 차트 엔진을 사용한다. 원본 차트 버튼은 공개 종목 코드만 담은 TradingView 사이트를 새 탭으로 연다. 외부 차트에 개인 매매 시각·수량·가격·이유를 보내지 않는다. 원본 사이트의 제공 시세/지연/수정주가는 토스 자료와 다를 수 있다.
+
+근거: [위젯 데이터 FAQ](https://www.tradingview.com/widget-docs/faq/data/), [위젯 아시아 지원 시장](https://www.tradingview.com/widget-docs/markets/asia-pacific/), [Lightweight Charts 설치·라이선스](https://tradingview.github.io/lightweight-charts/docs).
