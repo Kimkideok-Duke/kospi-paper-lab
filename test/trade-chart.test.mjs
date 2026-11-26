@@ -4,6 +4,15 @@ import { tradeChart, recordTradeCharts } from '../server/trade-chart.mjs';
 const start = Date.parse('2026-11-26T11:00:00+09:00');
 const buy = (id,time=start,extra={}) => ({id:String(id),symbol:'TEST',name:'테스트 종목',time,side:'BUY',quantity:10,price:100,priceUsd:10,fxRate:1400,reason:'상승 확인',...extra});
 const sell = (id,time=start+600000,extra={}) => ({...buy(id,time),side:'SELL',realized:1000,price:110,priceUsd:11,reason:'익절',...extra});
+
+test('daily review chart includes every round trip in the local market day and excludes other symbols and dates',()=>{
+  const time=Date.parse('2026-11-26T01:00:00Z'); // US November 25, Korean November 26
+  const s={trades:[buy(1,time),sell(2,time+60000),buy(3,time+120000),sell(4,time+180000),buy(5,time+86400000),buy(6,time,{symbol:'OTHER'})],
+    tradeCharts:{1:{symbol:'TEST',points:[{time,price:10}]},3:{symbol:'TEST',points:[{time:time+120000,price:11}]},x:{symbol:'OTHER',points:[{time,price:999}]}}};
+  const before=structuredClone(s),r=tradeChart(s,'US','3',time+86400000,'2026-11-25');
+  assert.deepEqual(r.trades.map(t=>t.id),['1','2','3','4']);assert.deepEqual(r.trades.map(t=>t.reason),['상승 확인','익절','상승 확인','익절']);assert.equal(r.date,'2026-11-25');assert.equal(r.points.length,2);
+  assert.equal(tradeChart(s,'US','3',time+86400000,'2026-11-26'),null);assert.deepEqual(s,before);
+});
 test('a selected partial fill retrieves its own round trip, with actual USD prices and trade markers separate from quotes',()=>{
   const s={trades:[buy(1),sell(2,start+300000,{quantity:4}),sell(3,start+600000,{quantity:6}),buy(4,start+3600000)],reviewEvidence:{day:{points:[{symbol:'TEST',time:start-60000,price:9.9},{symbol:'OTHER',time:start,price:999},{symbol:'TEST',time:start+60000,price:10.2}]}}};
   const before=structuredClone(s),r=tradeChart(s,'US','2',start+7200000);

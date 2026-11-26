@@ -10,6 +10,7 @@ import { activateDailyPolicy } from "./strategy-policy.mjs";
 import { marketEvents, ingestEvents, eventExitReason, eventsView, EVENT_POLICY } from "./market-events.mjs";
 import { marketTransport } from "./market-transport.mjs";
 import { patternReport } from "./chart-patterns.mjs";
+import { stockReview } from "./stock-review.mjs";
 import { tradeChart } from "./trade-chart.mjs";
 import { collectClosingAudits, closingReview } from "./closing-audit.mjs";
 
@@ -502,7 +503,9 @@ async function handler(request, env) {
       const id = new URL(request.url).searchParams.get("id");
       if (!id || id.length > 100) throw new RequestError(400, "거래를 선택해 주세요.");
       const market = pathname.includes("/us/") ? "US" : "KR", row = market === "US" ? await usRecord(env) : await record(env);
-      const result = tradeChart(row ? JSON.parse(row.state) : { trades: [] }, market, id);
+      const date = new URL(request.url).searchParams.get("date");
+      if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new RequestError(400, "날짜 형식을 확인해 주세요.");
+      const result = tradeChart(row ? JSON.parse(row.state) : { trades: [] }, market, id, Date.now(), date);
       if (!result) throw new RequestError(404, "해당 거래를 찾을 수 없습니다.");
       return json(result);
     }
@@ -520,7 +523,7 @@ async function handler(request, env) {
       const state = row ? JSON.parse(row.state) : market === "US" ? initialUsState() : initialState();
       const date = new URL(request.url).searchParams.get("date");
       if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new RequestError(400,"날짜 형식을 확인해 주세요.");
-      if (date) return json({ report: closingReview(state,state.reviews?.[date]) });
+      if (date) return json({ report: stockReview(closingReview(state,state.reviews?.[date])) });
       return json(reviewCalendar(state,market,Date.now()));
     }
     if (pathname === "/api/health" && request.method === "GET") return json({ now: Date.now(), batchEnabled: env.MARKETLAB_BATCH === true, api: marketTransport.status(),

@@ -1,4 +1,9 @@
 // Display-only grouping. Every original fill remains selectable in the list.
+export function fillReasons(fill) {
+  const groups=new Map();
+  for(const t of fill.members??[fill]){const reason=t.reason||'저장된 매매 이유가 없습니다.',row=groups.get(reason)??{reason,count:0};row.count++;groups.set(reason,row);}
+  return [...groups.values()];
+}
 export function displayFills(fills, selectedId) {
   if (fills.length <= 24) return fills.map(t => ({ ...t, members: [t] }));
   const groups = new Map();
