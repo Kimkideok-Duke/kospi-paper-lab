@@ -163,7 +163,7 @@ async function assess(client, stock, slot, phaseStart, context) {
     stock.news.reason ? stock.news.reason + " 반영" : null,
   ].filter(Boolean).join(" · ");
   return {
-    ...stock, reason,
+    ...stock, reason, momentum: candles.momentum,
     score: stock.score + weight(candles.momentum, 0, 3) - spread
       + Math.sign(institutional ?? 0) * 0.2 + Math.sign(programNet ?? 0) * 0.1,
     validPrice: price => price > lower && price < upper && Math.abs(rate(price, stock.q.price)) <= 0.8,

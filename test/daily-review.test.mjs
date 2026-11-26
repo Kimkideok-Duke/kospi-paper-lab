@@ -64,6 +64,8 @@ test('actual US candidate evaluation uses the learned threshold, rather than mer
   const make=threshold=>{const s=state('US');s.dailyPolicy={current:{minimumMomentumPct:threshold,maximumSpreadPct:.65}};s.universe={date,stocks:[{symbol:'AAPL',name:'애플',type:'주식',marketCountry:'US'}]};s.previous={date,index:2,prices:{AAPL:100}};return s;};
   const client={missing:new Set(),async get(path){if(path==='prices')return ['AAPL','SPY','QQQ'].map(symbol=>({symbol,currency:'USD',lastPrice:'100.3',timestamp:new Date(time).toISOString()}));if(path==='rankings')return{rankedAt:new Date(time).toISOString(),rankings:[{symbol:'AAPL',currency:'USD',price:{basePrice:'100'},tradingAmount:'100000000'}]};if(path==='exchange-rate')return{baseCurrency:'USD',quoteCurrency:'KRW',midRate:'1400',validFrom:new Date(time-1000).toISOString(),validUntil:new Date(time+60000).toISOString()};if(path==='candles')return{candles:[100.3,100.15,100].map((price,i)=>({currency:'USD',timestamp:new Date(time-i*60000).toISOString(),closePrice:String(price),volume:'10000'}))};if(path==='orderbook')return{currency:'USD',timestamp:new Date(time).toISOString(),asks:[{price:'100.31',volume:'10000'}],bids:[{price:'100.30',volume:'10000'}]};if(path.endsWith('/warnings'))return[];throw Error(path);}};
   const slot={market:'US',date,index:3,regularStart:at(date+'T14:30:00Z'),regularEnd:at(date+'T21:00:00Z')},normal=make(.15),strict=make(.4);
-  assert.equal((await scanUs(normal,slot,client,normal.calendar.result)).trades.length,1);
+  assert.equal((await scanUs(normal,slot,client,normal.calendar.result)).trades.length,0);
+  assert.equal(normal.paperOrders.length,1); assert.equal(normal.paperOrders[0].executionStyle,"RESTING_ENTRY");
   assert.equal((await scanUs(strict,slot,client,strict.calendar.result)).trades.length,0);
+  assert.equal(strict.paperOrders.length,0);
 });

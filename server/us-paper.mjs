@@ -37,7 +37,7 @@ async function assess(client, stock, slot, context) {
   if (!Number.isFinite(momentum) || momentum <= (stock.news.caution ? Math.max(0.45, policy.minimumMomentumPct) : policy.minimumMomentumPct) || amount < 20_000_000 / context.fx.rate) return null;
   if (stock.hourly !== null && stock.hourly < 0.2) return null;
   if (context.indexChange !== null && context.indexChange < -1.5 && (stock.hourly ?? momentum) < 0.65) return null;
-  return { ...stock,
+  return { ...stock, momentum,
     score: stock.score + weight(momentum, 0, 3) - spread,
     reason: [stock.hourly !== null ? "직전 분석 " + percentage(stock.hourly) : null, "최근 분봉 " + percentage(momentum),
       "호가 간격 " + spread.toFixed(2) + "%", stock.news.reason, "거래 시점 환율로 원화 정산"].filter(Boolean).join(" · "),

@@ -11,7 +11,7 @@ import "../scripts/build.mjs";
 const { default: app, runMonitor } = await import("../dist/server/index.js");
 const now = Date.parse("2026-11-25T10:00:00+09:00");
 const start = now - 3600000, end = now + 5 * 3600000;
-const candidate = (symbol = "005930", type = "주식") => ({ symbol, name: "테스트", type, validPrice: () => true, reason: "테스트 조건" });
+const candidate = (symbol = "005930", type = "주식") => ({ symbol, name: "테스트", type, momentum: 1.2, validPrice: () => true, reason: "테스트 조건" });
 function context(time = now, price = 10000, volume = 1000, symbol = "005930", currency = "KRW") {
   return { now: time, regularStart: start, regularEnd: end, quotes: new Map([[symbol, { price, time }]]),
     books: new Map([[symbol, { currency, timestamp: new Date(time).toISOString(), asks: [{ price: String(price + 5), volume: String(volume) }], bids: [{ price: String(price - 5), volume: String(volume) }] }]]), candidates: [] };
@@ -270,4 +270,59 @@ test("allocation policy migration preserves fills and sells, cancels old pending
   assert.equal(state.versions.length, before.versions.length + 1);
   upgradePaper(state, "KR", now + 2);
   assert.equal(state.versions.length, before.versions.length + 1);
+});
+
+
+test("resting entries wait for executable prices, reserve cash, partially fill and expire in both markets", () => {
+  for (const market of ["KR", "US"]) {
+    const state = upgradePaper(market === "KR" ? initialState() : initialUsState(), market, now);
+    const fx = market === "US" ? {rate:1400,from:now-1000,until:end} : null;
+    const run = (time, price, volume=1000, candidates=[]) => {
+      const ctx=context(time,price,volume,"005930",market === "US" ? "USD" : "KRW");
+      ctx.books.get("005930").asks[0].price=String(price+.01); ctx.books.get("005930").bids[0].price=String(price-.01);
+      return market === "KR" ? execute(state,{...ctx,candidates,monitor:!candidates.length}) : executeUs(state,{...ctx,slot:{regularStart:start,regularEnd:end},fx,candidates,monitor:!candidates.length});
+    };
+    assert.deepEqual(run(now,100,1000,[{...candidate(),momentum:.5}]),[]);
+    const order=state.paperOrders[0]; assert.equal(order.executionStyle,"RESTING_ENTRY");
+    assert.equal(order.limitPrice,99.8); assert.equal(state.cash,10000000);
+    run(now+60000,100,1000,[{...candidate("OTHER"),momentum:.5}]);
+    assert.equal(state.paperOrders.filter(o=>o.side==="BUY").length,1);
+    assert.equal(run(now+120000,99.7,100)[0].quantity,10);
+    assert.equal(order.status,"PARTIAL_FILLED"); assert.ok(state.cash>=0);
+    run(now+900000,99.7,100);
+    assert.equal(order.status,"EXPIRED"); assert.equal(order.filledQuantity,10);
+    assert.ok(state.paperOrders.some(o=>o.executionStyle==="RESTING_TAKE_PROFIT"));
+  }
+});
+
+test("preplaced profit target fills from bids even before last trade reaches target, then stop overrides residual target", () => {
+  const state=upgradePaper(initialState(),"KR",now);
+  execute(state,{...context(now,10000,10000),candidates:[candidate()]});
+  execute(state,{...context(now+60000,10100,10000),monitor:true});
+  const target=state.paperOrders.find(o=>o.executionStyle==="RESTING_TAKE_PROFIT");
+  assert.ok(target); assert.equal(target.status,"PENDING"); assert.equal(target.expiresAt,end);
+  const ctx=context(now+120000,target.limitPrice-1,100);
+  ctx.books.get("005930").bids[0].price=String(target.limitPrice);
+  const fill=execute(state,{...ctx,monitor:true});
+  assert.equal(fill[0].quantity,10); assert.equal(fill[0].executionStyle,"RESTING_TAKE_PROFIT");
+  assert.equal(target.status,"PARTIAL_FILLED");
+  execute(state,{...context(now+180000,9700,10000),monitor:true});
+  assert.equal(target.status,"CANCELED"); assert.equal(state.positions.length,0);
+  assert.match(state.trades.at(-1).reason,/손절/);
+});
+
+test("adverse news cancels an unfilled entry and replaces an existing profit target; duplicate targets never accumulate", () => {
+  const s=upgradePaper(initialState(),"KR",now);
+  execute(s,{...context(),candidates:[{...candidate(),momentum:.5}]});
+  s.eventWatch={blocks:{'005930':{until:now+3600000}}};
+  execute(s,{...context(now+60000,9950),monitor:true});
+  assert.equal(s.paperOrders[0].status,"CANCELED"); assert.equal(s.trades.length,0);
+  delete s.eventWatch;
+  execute(s,{...context(now+120000,10000,10000),candidates:[candidate()]});
+  execute(s,{...context(now+180000,10100),monitor:true});
+  execute(s,{...context(now+240000,10100),monitor:true});
+  const targets=s.paperOrders.filter(o=>o.executionStyle==="RESTING_TAKE_PROFIT"); assert.equal(targets.length,1);
+  execute(s,{...context(now+300000,10000,10000),monitor:true,openingExit:()=>"장중 중요 공시 보호 매도"});
+  assert.equal(targets[0].status,"CANCELED"); assert.equal(s.positions.length,0);
+  assert.equal(s.trades.at(-1).source,"event");
 });

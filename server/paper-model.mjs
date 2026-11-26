@@ -1,5 +1,5 @@
 import { activateDailyPolicy } from "./strategy-policy.mjs";
-export const MODEL_VERSION = "paper-v5-daily-review";
+export const MODEL_VERSION = "paper-v6-resting-limits";
 export const defaults = market => ({ commissionBps: market === "US" ? 10 : 1.5, taxBps: market === "US" ? 0 : 20,
   fxSpreadBps: market === "US" ? 10 : 0, participationPct: 10, limitBps: 20, ttlSeconds: 300 });
 export const activeOrder = order => ["PENDING", "PARTIAL_FILLED"].includes(order.status);
@@ -17,7 +17,7 @@ export function upgradePaper(state, market, now) {
     for (const order of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) { order.status = "CANCELED"; order.note = "전략 버전 변경: 다음 분석에서 새 규칙으로 평가"; }
     state.paperModel = { enabled: true, code: MODEL_VERSION, version: MODEL_VERSION + ":" + (state.versions.length + 1), config, appliedAt: now };
     state.versions.push({ id: state.paperModel.version, time: now, baseline: paperTotal(state, market),
-      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 1분 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · −2.5%/+5%" });
+      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 1분 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · 눌림 지정가/목표가 사전 주문 · −2.5%/+5%" });
   }
   activateDailyPolicy(state, market, now);
   return state;
@@ -76,22 +76,43 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
   if (review || now < regularStart || now >= regularEnd) return [];
   const source = event ? "event" : monitor ? "monitor" : manual ? "manual" : "batch", trades = [], sold = new Set();
   const pending = (symbol, side) => state.paperOrders.some(o => activeOrder(o) && o.symbol === symbol && o.side === side);
-  function newOrder(stock, side, quantity, quote, reason) {
+  function newOrder(stock, side, quantity, quote, reason, plan = {}) {
     state.nextPaperOrder = (state.nextPaperOrder ?? 0) + 1;
     state.paperOrders.push({ id: "sim:" + market + ":" + state.nextPaperOrder, symbol: stock.symbol, name: stock.name, type: stock.type,
       side, quantity, filledQuantity: 0, status: "PENDING", reference: quote.price,
-      limitPrice: quote.price * (1 + (side === "BUY" ? 1 : -1) * config.limitBps / 10000),
-      createdAt: now, expiresAt: Math.min(now + config.ttlSeconds * 1000, regularEnd), reason, source: reason.startsWith("장중 ") ? "event" : source,
+      limitPrice: plan.limitPrice ?? quote.price * (1 + (side === "BUY" ? 1 : -1) * config.limitBps / 10000),
+      executionStyle: plan.style ?? "MARKETABLE_LIMIT",
+      createdAt: now, expiresAt: Math.min(now + (plan.ttlSeconds ?? config.ttlSeconds) * 1000, regularEnd), reason, source: reason.startsWith("장중 ") ? "event" : source,
       strategyVersion: state.paperModel.version, config: { ...config }, note: "최신 호가와 잔량 확인 중" });
+  }
+  for (const o of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) {
+    const q = quotes.get(o.symbol);
+    if ((state.eventWatch?.blocks?.[o.symbol]?.until ?? 0) > now ||
+      (o.executionStyle === "RESTING_ENTRY" && fresh(q) && (q.price < o.reference * .985 || q.price > o.reference * 1.01))) {
+      o.status = "CANCELED"; o.note = "악재 또는 주문 기준가 이탈로 매수 잔량 취소";
+    }
   }
   for (const p of [...state.positions]) {
     const q = quotes.get(p.symbol);
-    if (!fresh(q) || pending(p.symbol, "SELL")) continue;
-    const reason = reasonFor({ ...p, entry: market === "US" ? p.entryUsd : p.entryPrice ?? p.entry }, q,
-      previous?.[p.symbol], manual) ?? openingExit?.(p, q.price);
+    if (!fresh(q)) continue;
+    const reason = openingExit?.(p, q.price) ?? reasonFor({ ...p, entry: market === "US" ? p.entryUsd : p.entryPrice ?? p.entry }, q,
+      previous?.[p.symbol], manual);
+    const sells = state.paperOrders.filter(o => activeOrder(o) && o.symbol === p.symbol && o.side === "SELL");
+    if (sells.some(o => o.executionStyle !== "RESTING_TAKE_PROFIT")) continue;
+    if (reason && !reason.includes("익절")) {
+      for (const o of sells) { o.status = "CANCELED"; o.note = "보호 매도 우선: " + reason; }
+    } else if (sells.length) {
+      const target = (market === "US" ? p.entryUsd : p.entryPrice ?? p.entry) * 1.05;
+      if (sells.every(o => o.quantity - o.filledQuantity === p.quantity && Math.abs(o.limitPrice - target) < 1e-7)) continue;
+      for (const o of sells) { o.status = "CANCELED"; o.note = "보유 수량·평균 매수가 변경으로 목표가 재설정"; }
+    }
     if (reason) {
       for (const order of state.paperOrders.filter(o => activeOrder(o) && o.symbol === p.symbol && o.side === "BUY")) { order.status = "CANCELED"; order.note = "매도 신호 발생"; }
       newOrder(p, "SELL", p.quantity, q, reason);
+    } else {
+      const target = (market === "US" ? p.entryUsd : p.entryPrice ?? p.entry) * 1.05;
+      if (Number.isFinite(target) && target > 0) newOrder(p, "SELL", p.quantity, q, "매수가 대비 +5% 목표가 사전 지정 주문", {
+        style: "RESTING_TAKE_PROFIT", limitPrice: target, ttlSeconds: (regularEnd - now) / 1000 });
     }
   }
   if (!monitor) for (const c of candidates) {
@@ -101,10 +122,13 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
     if (!fresh(q) || !c.validPrice(q.price)) continue;
     const reserved = state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY").reduce((sum, o) => sum + amounts(o.limitPrice, o.quantity - o.filledQuantity, "BUY", o.type, market, fx.rate, o.config).settlement, 0);
     const budget = Math.max(0, state.cash - reserved);
-    const limit = q.price * (1 + config.limitBps / 10000);
+    const immediate = event || (Number.isFinite(c.momentum) && c.momentum >= 1 && !c.news?.caution);
+    const limit = q.price * (1 + (immediate ? 1 : -1) * config.limitBps / 10000);
+    if (!(limit > 0) || (!immediate && !c.validPrice(limit))) continue;
     let quantity = Math.floor(budget / (limit * fx.rate * (1 + (config.commissionBps + config.fxSpreadBps) / 10000)));
     while (quantity > 0 && amounts(limit, quantity, "BUY", c.type, market, fx.rate, config).settlement > budget) quantity--;
-    if (quantity > 0) newOrder(c, "BUY", quantity, q, c.reason);
+    if (quantity > 0) newOrder(c, "BUY", quantity, q, c.reason + (immediate ? " · 강한 상승세/뉴스 반응 즉시 체결 우선" : " · 눌림 가격 사전 지정 주문"), {
+      style: immediate ? "MARKETABLE_LIMIT" : "RESTING_ENTRY", limitPrice: limit, ttlSeconds: immediate ? config.ttlSeconds : 900 });
   }
   const orders = state.paperOrders.filter(activeOrder).sort((a, b) => (a.side === "SELL" ? 0 : 1) - (b.side === "SELL" ? 0 : 1));
   for (const order of orders) {
@@ -128,7 +152,8 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
       if (order.side === "SELL") quantity = Math.min(quantity, position?.quantity ?? 0);
       if (order.side === "BUY" && sold.has(order.symbol)) continue;
       let costs = amounts(level.price, quantity, order.side, order.type, market, fx.rate, order.config);
-      while (quantity > 0 && order.side === "BUY" && costs.settlement > state.cash) costs = amounts(level.price, --quantity, order.side, order.type, market, fx.rate, order.config);
+      const otherReserved = order.side === "BUY" ? state.paperOrders.filter(o => o !== order && activeOrder(o) && o.side === "BUY").reduce((sum, o) => sum + amounts(o.limitPrice, o.quantity - o.filledQuantity, "BUY", o.type, market, fx.rate, o.config).settlement, 0) : 0;
+      while (quantity > 0 && order.side === "BUY" && costs.settlement > Math.max(0, state.cash - otherReserved)) costs = amounts(level.price, --quantity, order.side, order.type, market, fx.rate, order.config);
       if (quantity < 1) continue;
       let realized = 0, priceEffectKrw = 0, fxEffectKrw = 0;
       if (order.side === "BUY") {
@@ -176,6 +201,7 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
       const trade = { id: String(state.trades.length + 1), market, time: now, quoteTime: q.time, orderId: order.id,
         strategyVersion: order.strategyVersion, source: order.source === "event" ? "event" : source, symbol: order.symbol, name: order.name, type: order.type, side: order.side,
         quantity, price: level.price * fx.rate, amount: costs.gross, cashAmount: costs.settlement, costs: { commission: costs.commission, transactionTax: costs.transactionTax, fxSpread: costs.fxSpread, slippage },
+        executionStyle: order.executionStyle ?? "MARKETABLE_LIMIT", limitPrice: order.limitPrice,
         reason: order.reason, realized, total, totalPnl: total - 10_000_000, priceEffectKrw, fxEffectKrw,
         costEffectKrw: order.side === "SELL" ? realized - priceEffectKrw - fxEffectKrw : 0,
         ...(market === "US" ? { currency: "USD", priceUsd: level.price, amountUsd: level.price * quantity, fxRate: fx.rate, fxTime: fx.from } : {}) };

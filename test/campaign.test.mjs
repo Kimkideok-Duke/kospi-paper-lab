@@ -95,7 +95,7 @@ test("opening news informs ETF entry without reducing allocation and an off-sche
     if (route === "candles") return result({ candles: Array.from({ length: 5 }, (_, i) => ({
       timestamp: new Date(Date.now() - 60000 * i).toISOString(), closePrice: String(10000 - 20 * i), volume: "2500",
     })) });
-    if (route === "orderbook") return result({ currency: "KRW", timestamp: time(), bids: [{ price: String(outcome - 5), volume: "3000" }], asks: [{ price: String(outcome + 5), volume: "3000" }] });
+    if (route === "orderbook") return result({ currency: "KRW", timestamp: time(), bids: [{ price: String(outcome === 10000 ? outcome - 30 : outcome - 5), volume: "3000" }], asks: [{ price: String(outcome === 10000 ? outcome - 25 : outcome + 5), volume: "3000" }] });
     if (route === "price-limits") return result({ timestamp: time(), upperLimitPrice: "13000", lowerLimitPrice: "7000" });
     if (route.endsWith("/warnings")) return result([]);
     if (route === "trades") return result([{ timestamp: time(), volume: "50" }]);
@@ -137,8 +137,8 @@ test("opening news informs ETF entry without reducing allocation and an off-sche
   const first = await runSlot(env);
   assert.equal(first.status, "ok");
   assert.equal(first.trades.length, 1);
-  assert.equal(first.trades[0].amount, 3001500);
-  assert.equal(first.trades[0].costs.commission, 451);
+  assert.equal(first.trades[0].amount, 2992500);
+  assert.equal(first.trades[0].costs.commission, 449);
   assert.ok(first.trades[0].strategyVersion);
   assert.match(first.trades[0].reason, /미국 뉴스/);
   assert.equal(first.trades[0].realized, 0);
@@ -165,13 +165,13 @@ test("opening news informs ETF entry without reducing allocation and an off-sche
   assert.equal(sale.status, "ok");
   assert.equal(sale.trades.length, 1);
   assert.equal(sale.trades[0].source, "manual");
-  assert.equal(sale.trades[0].realized, 176072);
+  assert.equal(sale.trades[0].realized, 185074);
   assert.deepEqual((await (await api("/api/manual-run", manual)).json()).trades, sale.trades);
   assert.equal(newsRequests, first.news.feedCount);
   const saved = await (await api("/api/state")).json();
   assert.equal(saved.trades.length, 2);
   assert.equal(saved.positions.length, 0);
-  assert.equal(saved.totals.total, 10176072);
+  assert.equal(saved.totals.total, 10185074);
   assert.equal(saved.history.length, 2);
   assert.deepEqual(saved.openingNews, first.news);
   assert.deepEqual(saved.scans[0].news, first.news);

@@ -110,7 +110,7 @@ function fakeClient(now, overrides = {}) {
       if (path === "rankings") return { rankedAt: new Date(now).toISOString(), rankings: [{ symbol: "AAPL", currency: "USD", tradingAmount: "100000000", price: { basePrice: "99" } }] };
       if (path === "prices") return params.symbols.split(",").map(symbol => ({ symbol, currency: "USD", lastPrice: "100", timestamp: new Date(now).toISOString() }));
       if (path === "exchange-rate") return { baseCurrency: "USD", quoteCurrency: "KRW", midRate: "1400", validFrom: new Date(now - 1000).toISOString(), validUntil: new Date(now + 60000).toISOString() };
-      if (path === "candles") return { candles: Array.from({ length: 5 }, (_, i) => ({ currency: "USD", timestamp: new Date(now - i * 60000).toISOString(), closePrice: i ? "99.5" : "100", volume: "10000" })) };
+      if (path === "candles") return { candles: Array.from({ length: 5 }, (_, i) => ({ currency: "USD", timestamp: new Date(now - i * 60000).toISOString(), closePrice: i ? "99" : "100", volume: "10000" })) };
       if (path === "orderbook") return { currency: "USD", timestamp: new Date(now).toISOString(), asks: [{ price: "100.01", volume: "100" }], bids: [{ price: "99.99", volume: "100" }] };
       if (path.endsWith("/warnings")) return [];
       throw new Error("Unexpected read-only endpoint " + path);
