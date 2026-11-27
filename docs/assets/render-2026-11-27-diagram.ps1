@@ -1,8 +1,9 @@
+param([ValidateSet('marketlab-2026-11-27-verification','marketlab-2026-11-27-cover')][string]$ImageName='marketlab-2026-11-27-verification')
 # Render this post's original SVG using Windows GDI+. No external image or package.
 Add-Type -AssemblyName System.Drawing
 $assetRoot = $PSScriptRoot
-[xml]$diagram = Get-Content -LiteralPath (Join-Path $assetRoot 'marketlab-2026-11-27-verification.svg') -Raw
-$bitmap = [System.Drawing.Bitmap]::new(2560,1520)
+[xml]$diagram = Get-Content -LiteralPath (Join-Path $assetRoot ($ImageName+'.svg')) -Raw
+$bitmap = [System.Drawing.Bitmap]::new(2*[int]$diagram.DocumentElement.GetAttribute('width'),2*[int]$diagram.DocumentElement.GetAttribute('height'))
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $graphics.ScaleTransform(2,2)
 $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
@@ -20,5 +21,5 @@ foreach($element in $diagram.SelectNodes('//*')) {
   }
   $brush.Dispose()
 }
-$bitmap.Save((Join-Path $assetRoot 'marketlab-2026-11-27-verification.png'),[System.Drawing.Imaging.ImageFormat]::Png)
+$bitmap.Save((Join-Path $assetRoot ($ImageName+'.png')),[System.Drawing.Imaging.ImageFormat]::Png)
 $graphics.Dispose();$bitmap.Dispose()

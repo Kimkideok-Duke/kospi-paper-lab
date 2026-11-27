@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<rect width="1280" height="720" fill="#122d45"/>
+<rect x="64" y="64" width="1152" height="592" rx="24" fill="#193c55"/>
+<g font-family="Malgun Gothic,Apple SD Gothic Neo,sans-serif">
+<text x="112" y="142" font-size="22" font-weight="700" fill="#7ee0c6">MARKET LAB / 03</text>
+<text x="112" y="244" font-size="44" font-weight="700" fill="#ffffff">한 주씩 반복되던 매도에서,</text>
+<text x="112" y="312" font-size="44" font-weight="700" fill="#ffffff">검증 가능한 모의매매로</text>
+<text x="112" y="374" font-size="22" fill="#bdd2dc">체결을 설명하고, 판단을 복기하고, 당시 자료로 검증하기</text>
+<rect x="112" y="430" width="300" height="104" rx="14" fill="#255268"/>
+<rect x="490" y="430" width="300" height="104" rx="14" fill="#255268"/>
+<rect x="868" y="430" width="300" height="104" rx="14" fill="#255268"/>
+<text x="262" y="493" text-anchor="middle" font-size="29" font-weight="700" fill="#ffffff">주문과 체결</text>
+<text x="640" y="493" text-anchor="middle" font-size="29" font-weight="700" fill="#ffffff">종목별 복기</text>
+<text x="1018" y="493" text-anchor="middle" font-size="29" font-weight="700" fill="#ffffff">과거 자료 검증</text>
+<text x="112" y="606" font-size="18" fill="#91b5c2">2026.11.27 개발 기록 · 구현과 검증 범위를 남기는 개발기</text>
+</g></svg>
