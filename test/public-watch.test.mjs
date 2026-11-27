@@ -37,7 +37,7 @@ test('20 active anonymous browser sessions are enforced server-side, invalid tok
   assert.equal((await f.handle(request('/watch/join',{method:'POST'}))).status,200);
 });
 test('dedicated public gateway blocks login, private APIs, file/traversal and mutation routes even with owner cookies; only viewer cookie and allowlisted headers pass',async t=>{
-  const seen=[],backend=http.createServer((req,res)=>{seen.push({path:req.url,headers:req.headers});res.setHeader('content-type','application/json');res.setHeader('x-owner-email','PRIVATE_MARKER');res.end('{}');});
+  const seen=[],backend=http.createServer((req,res)=>{seen.push({path:req.url,headers:req.headers});res.setHeader('content-type','application/json');res.setHeader('content-security-policy',"default-src 'none'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'");res.setHeader('x-frame-options','DENY');res.setHeader('x-owner-email','PRIVATE_MARKER');res.end('{}');});
   await new Promise(r=>backend.listen(0,'127.0.0.1',r));const gateway=createWatchGateway({backend:'http://127.0.0.1:'+backend.address().port});await new Promise(r=>gateway.listen(0,'127.0.0.1',r));
   t.after(async()=>{gateway.closeAllConnections();backend.closeAllConnections();await Promise.all([new Promise(r=>gateway.close(r)),new Promise(r=>backend.close(r))]);});
   const base='http://127.0.0.1:'+gateway.address().port;
@@ -47,4 +47,12 @@ test('dedicated public gateway blocks login, private APIs, file/traversal and mu
   assert.equal(seen[0].path,'/watch/data');assert.equal(seen[0].headers.cookie,'marketlab_viewer='+'a'.repeat(48));assert.equal(seen[0].headers.authorization,undefined);assert.equal(seen[0].headers['oai-authenticated-user-id'],undefined);
   assert.equal((await fetch(base+'/watch/data',{method:'POST'})).status,405);assert.equal((await fetch(base+'/watch/join',{method:'POST',headers:{origin:'https://evil.example'}})).status,403);
   assert.equal((await fetch(base+'/watch/join',{method:'POST',headers:{origin:base.replace('http:','https:')}})).status,200);assert.equal(seen[1].headers.origin,'http://127.0.0.1:'+backend.address().port);
+  for(const path of ['/watch','/watch/watch.js','/watch/watch.css']){
+    const r=await fetch(base+path,{method:'HEAD'});assert.equal(r.status,200);assert.equal(await r.text(),'');
+    assert.equal(r.headers.get('x-frame-options'),null);assert.ok(!r.headers.get('content-security-policy').includes('frame-ancestors'));
+    assert.match(r.headers.get('content-security-policy'),/script-src 'self'/);
+  }
+  assert.equal((await fetch(base+'/',{method:'HEAD',redirect:'manual'})).status,302);
+  assert.equal((await fetch(base+'/settings',{method:'HEAD'})).status,404);
+  assert.equal((await fetch(base+'/watch',{headers:{origin:'https://chatgpt.com'}})).status,200);
 });
