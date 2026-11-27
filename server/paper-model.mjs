@@ -1,5 +1,6 @@
 import { activateDailyPolicy } from "./strategy-policy.mjs";
-export const MODEL_VERSION = "paper-v9-protective-liquidity";
+export const STOP_LOSS_PCT = 7;
+export const MODEL_VERSION = "paper-v10-stop-seven";
 export const defaults = market => ({ commissionBps: market === "US" ? 10 : 1.5, taxBps: market === "US" ? 0 : 20,
   fxSpreadBps: market === "US" ? 10 : 0, participationPct: 10, limitBps: 20, ttlSeconds: 300 });
 export const activeOrder = order => ["PENDING", "PARTIAL_FILLED"].includes(order.status);
@@ -16,10 +17,15 @@ export function upgradePaper(state, market, now) {
   if (!state.paperModel || state.paperModel.code !== MODEL_VERSION) {
     const config = state.paperModel?.config ?? defaults(market);
     for (const order of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) { order.status = "CANCELED"; order.note = "전략 버전 변경: 다음 분석에서 새 규칙으로 평가"; }
+    // Cancel only unfilled stop remnants created under the old threshold.
+    for (const order of state.paperOrders.filter(o => activeOrder(o) && o.side === 'SELL' && /손절 기준/.test(o.reason ?? ''))) {
+      order.status = 'CANCELED';
+      order.note = '손절 기준 7% 변경으로 잔량 재평가';
+    }
     state.capitalRisk = { enabled:true, positionPct:15, exposurePct:60, tradeRiskPct:0.35, dailyPausePct:1 };
     state.paperModel = { enabled: true, code: MODEL_VERSION, version: MODEL_VERSION + ":" + (state.versions.length + 1), config, appliedAt: now };
     state.versions.push({ id: state.paperModel.version, time: now, baseline: paperTotal(state, market),
-      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 5초 보유 감시 · 호가 잔량 10% · 5종목 · 종목당 최대15% · 전체 투자60% · 일손실1% 매수중지 · 장중 뉴스 2분/공시 1분 · 급등 추격 제한 · 손절 후 30분 대기 · 보호 매도 잔량 재평가 · −2.5%/+5%" });
+      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 5초 보유 감시 · 호가 잔량 10% · 5종목 · 종목당 최대15% · 전체 투자60% · 일손실1% 매수중지 · 장중 뉴스 2분/공시 1분 · 급등 추격 제한 · 손절 후 30분 대기 · 보호 매도 잔량 재평가 · −7%/+5%" });
   }
   activateDailyPolicy(state, market, now);
   if (state.monitorPolicy?.intervalMs !== 5000) {
@@ -204,7 +210,7 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
     if (risk?.enabled) {
       const heldValue = equity - state.cash;
       const roundTripCostPct = (2*config.commissionBps + config.taxBps + 2*config.fxSpreadBps)/100;
-      const stopRiskBudget = equity * risk.tradeRiskPct / (2.5 + roundTripCostPct);
+      const stopRiskBudget = equity * risk.tradeRiskPct / (STOP_LOSS_PCT + roundTripCostPct);
       budget = Math.max(0,Math.min(budget, equity*risk.positionPct/100,
         equity*risk.exposurePct/100-heldValue-reserved,stopRiskBudget));
       const book = books.get(c.symbol);

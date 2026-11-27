@@ -370,7 +370,7 @@ function renderAnalytics(s) {
   const feeFormat = value => new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 4 }).format(value / 100);
   setText("#conditions-costs", "수수료 " + feeFormat(profile.commissionBps) + "% · 주식 매도세 " + feeFormat(profile.taxBps) + "%");
   setText("#conditions-rules", (isUs() ? "미국 현지 정규장만 운영하며, 매 거래 시점 환율로 원화 정산합니다. " : "국내 정규장 연속매매 시간에 운영합니다. ")
-    + "첫 신규 분석은 개장 3분 뒤, 이후 개장 기준 10분 간격, 보유 종목은 5초 간격으로 감시합니다. 최신 호가 잔량의 " + profile.participationPct + "% 이내에서 모의 체결하며, 즉시 체결 우선 주문은 " + profile.ttlSeconds + "초 뒤 만료됩니다. 일반 진입은 기준가보다 " + feeFormat(profile.limitBps) + "% 낮은 지정가로 최대 15분 대기하고, 강한 상승세(최근 분봉 +1% 이상)·뉴스 반응에는 즉시 체결을 우선합니다. 보유분은 +5% 목표가에 당일 매도 주문을 미리 두며 손절·악재·추세 약화 시 취소하고 보호 매도를 우선합니다. 최대 5종목·종목별 비중 상한 없이 가용 현금 내 주문, 주가 기준 −2.5% 손절·+5% 익절을 적용합니다. 감시 간격·가격 급변·잔량 부족으로 손절 가격의 체결은 보장하지 않습니다.");
+    + "첫 신규 분석은 개장 3분 뒤, 이후 개장 기준 10분 간격, 보유 종목은 5초 간격으로 감시합니다. 최신 호가 잔량의 " + profile.participationPct + "% 이내에서 모의 체결하며, 즉시 체결 우선 주문은 " + profile.ttlSeconds + "초 뒤 만료됩니다. 일반 진입은 기준가보다 " + feeFormat(profile.limitBps) + "% 낮은 지정가로 최대 15분 대기하고, 강한 상승세(최근 분봉 +1% 이상)·뉴스 반응에는 즉시 체결을 우선합니다. 보유분은 +5% 목표가에 당일 매도 주문을 미리 두며 손절·악재·추세 약화 시 취소하고 보호 매도를 우선합니다. 최대 5종목·종목별 비중 상한 없이 가용 현금 내 주문, 주가 기준 −7% 손절·+5% 익절을 적용합니다. 감시 간격·가격 급변·잔량 부족으로 손절 가격의 체결은 보장하지 않습니다.");
   const version = selectedMarket + ":" + (model?.version ?? "default");
   if (modelFormVersion !== version && !$("#model-form").contains(document.activeElement)) {
     for (const [key, value] of Object.entries(profile)) $("#model-form").elements.namedItem(key).value = ["commissionBps", "taxBps", "fxSpreadBps", "limitBps"].includes(key) ? value / 100 : value;

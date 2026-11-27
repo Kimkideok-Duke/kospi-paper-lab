@@ -1,4 +1,4 @@
-import { executePaper } from "./paper-model.mjs";
+import { executePaper, STOP_LOSS_PCT } from "./paper-model.mjs";
 export const INITIAL = 10_000_000;
 export const LIMIT = 5;
 export const START = "2026-11-25";
@@ -91,7 +91,7 @@ export function mark(state, quotes, time) {
 export function sellReason(position, quote, previousPrice, manual = false) {
   const change = rate(quote.price, position.entry);
   const intraday = rate(quote.price, previousPrice);
-  if (change <= -2.5) return "매수가 대비 " + percentage(change) + " 하락으로 손절 기준(−2.5%) 도달";
+  if (change <= -STOP_LOSS_PCT + 1e-9) return "매수가 대비 " + percentage(change) + " 하락으로 손절 기준(−7%) 도달";
   if (change >= 5) return "매수가 대비 " + percentage(change) + " 상승으로 익절 기준(+5%) 도달";
   if (intraday !== null && intraday <= -1.5) return (manual ? "최근 정기 분석 대비 " : "직전 시간 대비 ") + percentage(intraday) + "로 단기 추세 약화";
   return null;

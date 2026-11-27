@@ -308,7 +308,7 @@ test("preplaced profit target fills from bids even before last trade reaches tar
   const fill=execute(state,{...ctx,monitor:true});
   assert.equal(fill[0].quantity,10); assert.equal(fill[0].executionStyle,"RESTING_TAKE_PROFIT");
   assert.equal(target.status,"PARTIAL_FILLED");
-  execute(state,{...context(now+180000,9700,10000),monitor:true});
+  execute(state,{...context(now+180000,9200,10000),monitor:true});
   assert.equal(target.status,"CANCELED"); assert.equal(state.positions.length,0);
   assert.match(state.trades.at(-1).reason,/손절/);
 });
@@ -333,13 +333,13 @@ test("stop remainder follows a fresh executable bid and re-entry waits after the
   const s=upgradePaper(initialState(),"KR",now);
   s.cash=101000;
   execute(s,{...context(),candidates:[candidate()]});
-  const down=context(now+10000,9600);
-  down.books.get("005930").bids[0].price="9500";
+  const down=context(now+10000,9200);
+  down.books.get("005930").bids[0].price="9100";
   assert.equal(execute(s,down).length,0);
-  const crash=context(now+15000,9400);
+  const crash=context(now+15000,9000);
   const sale=execute(s,crash);
-  assert.equal(sale[0].price,9395);
-  assert.equal(s.paperOrders.at(-1).reference,9600);
+  assert.equal(sale[0].price,8995);
+  assert.equal(s.paperOrders.at(-1).reference,9200);
   execute(s,{...context(now+20000),candidates:[candidate()]});
   assert.equal(s.entryObservations.at(-1).decision,"손절 후 30분 대기");
 });
@@ -408,11 +408,31 @@ test("protective sale uses observed bid depth and cannot reuse one book snapshot
   const s=upgradePaper(initialState(),"KR",now);
   s.cash=101000;
   execute(s,{...context(),candidates:[candidate()]});
-  const first={...context(now+10000,9600,2),monitor:true};
+  const first={...context(now+10000,9200,2),monitor:true};
   assert.equal(execute(s,first)[0].quantity,2);
   assert.equal(s.positions[0].quantity,8);
   assert.deepEqual(execute(s,first),[]);
-  const next={...context(now+15000,9400,20),monitor:true};
+  const next={...context(now+15000,9000,20),monitor:true};
   assert.equal(execute(s,next)[0].quantity,8);
   assert.equal(s.positions.length,0);
+});
+
+test("KR and US share exactly seven percent stop threshold with float boundary tolerance", () => {
+  assert.equal(sellReason({entry:10000},{price:9301}),null);
+  assert.match(sellReason({entry:10000},{price:9300}),/손절 기준\(−7%\)/);
+  assert.match(sellReason({entry:100},{price:93}),/손절/);
+  assert.match(sellReason({entry:100},{price:105}),/익절/);
+});
+test("new stop version cancels only old stop remainder and sizes against seven percent risk", () => {
+  const s=upgradeWithRisk(initialState(),"KR",now);
+  s.paperModel.code="paper-v9-protective-liquidity";
+  s.paperOrders.push({id:"stop",side:"SELL",status:"PARTIAL_FILLED",filledQuantity:2,reason:"손절 기준(−2.5%) 도달"});
+  s.paperOrders.push({id:"target",side:"SELL",status:"PENDING",reason:"매수가 대비 +5% 목표가 사전 지정 주문"});
+  upgradeWithRisk(s,"KR",now+1);
+  assert.equal(s.paperOrders[0].status,"CANCELED");
+  assert.equal(s.paperOrders[0].filledQuantity,2);
+  assert.equal(s.paperOrders[1].status,"PENDING");
+  execute(s,{...context(),candidates:[candidate()]});
+  const buy=s.paperOrders.find(o=>o.side==="BUY");
+  assert.ok(buy.quantity*buy.limitPrice<500000);
 });
