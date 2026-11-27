@@ -1,3 +1,4 @@
+import {socialContext} from './social-evidence.mjs';
 import {initialState,sellReason} from '../server/engine.mjs';
 import {upgradePaper,executePaper,paperTotal} from '../server/paper-model.mjs';
 import {classifyEvent} from '../server/market-events.mjs';
@@ -31,7 +32,7 @@ export function replay(archive,parameters,{from,until}) {
     peak=Math.max(peak,total);
     drawdown=Math.max(drawdown,(peak-total)/peak*100);
     decisions.push({time:row.time,symbol:row.symbol,eligible,evidence:relevant.map(e=>e.url),
-      pattern:context.pattern?.signals??[]});
+      pattern:context.pattern?.signals??[],social:socialContext(archive.events??[],row.time)});
   }
   const equity=paperTotal(state,'KR');
   const sellOrders=new Set(state.trades.filter(t=>t.side==='SELL').map(t=>t.orderId)).size;

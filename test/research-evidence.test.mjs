@@ -30,3 +30,11 @@ test('historical bearish disclosure is used only after publication and pattern s
   const context=historicalContext({...row,points:[{time:time+1000,observedAt:time+1000,price:50000}]},[],true);
   assert.equal(context.pattern.points.length,0);
 });
+
+test('community and X evidence rejects retrospective edits and copied posts',async()=>{
+  const {socialContext}=await import('../research/social-evidence.mjs');
+  const base={kind:'social',title:'시장 상승',url:'https://x.com/example/status/1',
+    publishedAt:10,availableAt:11,versionAt:10,identityVerified:true,originalVersionVerified:true};
+  assert.equal(socialContext([base,{...base,url:'https://x.com/example/status/2'}],20).count,1);
+  assert.equal(socialContext([{...base,versionAt:30},{...base,identityVerified:false}],20).count,0);
+});
