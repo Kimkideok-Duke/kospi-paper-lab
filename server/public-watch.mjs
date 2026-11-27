@@ -13,7 +13,9 @@ export function publicPortfolio(state,market){
   const value=positions.reduce((n,p)=>n+(p.valueKrw??0),0),cash=number(state.cash),total=cash==null?null:cash+value;
   return {market,currency:market==='US'?'USD':'KRW',initial:10000000,cash,total,pnl:total==null?null:total-10000000,positions,
     history:(state.history??[]).slice(-240).map(h=>({time:number(h.time),total:number(h.total)})),
-    trades:(state.trades??[]).filter(t=>['BUY','SELL'].includes(t.side)).slice(-100).reverse().map(t=>({time:number(t.time),symbol:symbol(t.symbol),name:instrument(t.name),side:t.side,quantity:number(t.quantity),price:number(market==='US'?t.priceUsd:t.price),realized:t.side==='SELL'?number(t.realized):null}))};
+    benchmarks:Object.values(state.benchmarks??{}).slice(0,4).map(b=>({symbol:symbol(b.symbol),name:instrument(b.name),since:number(b.since),time:number(b.time),strategyPct:number(b.strategyPct),returnPct:number(b.returnPct),
+      points:(b.points??[]).slice(-500).map(p=>({time:number(p.time),strategyPct:number(p.strategyPct),benchmarkPct:number(p.benchmarkPct)}))})),
+    trades:(state.trades??[]).filter(t=>['BUY','SELL'].includes(t.side)).slice(-5).reverse().map(t=>({time:number(t.time),symbol:symbol(t.symbol),name:instrument(t.name),side:t.side,quantity:number(t.quantity),price:number(market==='US'?t.priceUsd:t.price),realized:t.side==='SELL'?number(t.realized):null}))};
 }
 
 // Separate anonymous capability: never calls the private app, authenticates a user or sends an order.

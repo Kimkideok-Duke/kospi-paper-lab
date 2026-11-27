@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
 import {createPublicWatch,publicPortfolio,WATCH_LIMIT,WATCH_TTL} from '../server/public-watch.mjs';
 import {createWatchGateway} from '../server/watch-gateway.mjs';
 const base='http://127.0.0.1:8765';
@@ -35,6 +37,27 @@ test('20 active anonymous browser sessions are enforced server-side, invalid tok
   assert.equal((await f.handle(request('/watch/join',{method:'POST',cookie:viewers[0]}))).status,200);
   f.advance(WATCH_TTL+1);assert.equal((await f.handle(request('/watch/data',{cookie:viewers[0]}))).status,410);
   assert.equal((await f.handle(request('/watch/join',{method:'POST'}))).status,200);
+});
+test('public view returns only the latest five fills and saved same-period benchmark returns without exposing benchmark internals',()=>{
+  const state={cash:9000000,trades:Array.from({length:12},(_,i)=>({side:'BUY',time:i+1,symbol:'SPY',quantity:1,price:100,reason:'PRIVATE_MARKER'})),benchmarks:{SPY:{symbol:'SPY',name:'SPY',since:1000,time:2000,baseStrategy:999999,basePrice:100,private:'PRIVATE_MARKER',returnPct:2,strategyPct:-1,points:[{time:2000,benchmarkPct:2,strategyPct:-1,private:'PRIVATE_MARKER'}]}}};
+  const result=publicPortfolio(state,'US');assert.deepEqual(result.trades.map(t=>t.time),[12,11,10,9,8]);
+  assert.deepEqual(result.benchmarks,[{symbol:'SPY',name:'SPY',since:1000,time:2000,strategyPct:-1,returnPct:2,points:[{time:2000,strategyPct:-1,benchmarkPct:2}]}]);
+  assert.ok(!JSON.stringify(result).includes('PRIVATE_MARKER'));assert.equal(result.benchmarks[0].strategyPct,-1);
+});
+test('public charts label money/time axes, preserve irregular elapsed time and compare saved market returns on desktop and mobile widths',()=>{
+  class Node{constructor(){this.children=[];this.attributes={};this.textContent='';this.clientWidth=900;}append(...children){this.children.push(...children);}replaceChildren(...children){this.children=children;}setAttribute(key,value){this.attributes[key]=String(value);}}
+  const nodes=new Map(),get=selector=>{if(!nodes.has(selector))nodes.set(selector,new Node());return nodes.get(selector);};
+  const context=vm.createContext({Intl,document:{querySelector:get,createElement:()=>new Node(),createElementNS:()=>new Node()}});
+  const source=readFileSync(new URL('../web/watch.js',import.meta.url),'utf8');vm.runInContext(source.slice(0,source.indexOf('async function call(')),context);
+  const p={market:'KR',initial:10000000,total:10001000,cash:10001000,pnl:1000,positions:[],trades:[],history:[{time:1000000,total:10000000},{time:1060000,total:10000500},{time:1600000,total:10001000}],benchmarks:[{name:'KODEX 200',since:1000000,strategyPct:1,returnPct:2,points:[{time:1000000,strategyPct:0,benchmarkPct:0},{time:1600000,strategyPct:1,benchmarkPct:2}]}]};
+  vm.runInContext('data='+JSON.stringify({asOf:1600000,markets:[p]})+'; render();',context);
+  const chart=get('#chart'),line=chart.children.find(n=>n.attributes.points),coords=line.attributes.points.split(' ').map(p=>p.split(',').map(Number));
+  assert.ok(Math.abs((coords[1][0]-coords[0][0])/(coords[2][0]-coords[0][0])-.1)<.00001);
+  assert.ok(chart.children.some(n=>n.textContent==='금액 (원)'));assert.ok(chart.children.some(n=>n.textContent==='시간 (한국)'));
+  assert.ok(get('#benchmark-chart').children.some(n=>n.textContent==='수익률 (%)'));
+  assert.equal(get('#benchmark-rows').children[0].children.at(-1).textContent,'-1%p');
+  chart.clientWidth=360;vm.runInContext('market="US"; plot(document.querySelector("#chart"),[{color:"blue",points:[{time:1,value:10000000}]}]);',context);
+  assert.ok(chart.children.some(n=>n.textContent==='시간 (미국 동부)'));assert.ok(chart.children.every(n=>!JSON.stringify(n.attributes).includes('NaN')));assert.match(chart.attributes.viewBox,/360 280$/);
 });
 test('dedicated public gateway blocks login, private APIs, file/traversal and mutation routes even with owner cookies; only viewer cookie and allowlisted headers pass',async t=>{
   const seen=[],backend=http.createServer((req,res)=>{seen.push({path:req.url,headers:req.headers});res.setHeader('content-type','application/json');res.setHeader('content-security-policy',"default-src 'none'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'");res.setHeader('x-frame-options','DENY');res.setHeader('x-owner-email','PRIVATE_MARKER');res.end('{}');});
