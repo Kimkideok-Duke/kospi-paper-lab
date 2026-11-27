@@ -403,3 +403,16 @@ test("capital preservation defers cautioned and overheated candidates", () => {
     assert.ok(s.entryObservations[0].decision);
   }
 });
+
+test("protective sale uses observed bid depth and cannot reuse one book snapshot", () => {
+  const s=upgradePaper(initialState(),"KR",now);
+  s.cash=101000;
+  execute(s,{...context(),candidates:[candidate()]});
+  const first={...context(now+10000,9600,2),monitor:true};
+  assert.equal(execute(s,first)[0].quantity,2);
+  assert.equal(s.positions[0].quantity,8);
+  assert.deepEqual(execute(s,first),[]);
+  const next={...context(now+15000,9400,20),monitor:true};
+  assert.equal(execute(s,next)[0].quantity,8);
+  assert.equal(s.positions.length,0);
+});

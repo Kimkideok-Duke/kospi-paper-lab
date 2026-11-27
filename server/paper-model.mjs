@@ -1,5 +1,5 @@
 import { activateDailyPolicy } from "./strategy-policy.mjs";
-export const MODEL_VERSION = "paper-v8-capital-preservation";
+export const MODEL_VERSION = "paper-v9-protective-liquidity";
 export const defaults = market => ({ commissionBps: market === "US" ? 10 : 1.5, taxBps: market === "US" ? 0 : 20,
   fxSpreadBps: market === "US" ? 10 : 0, participationPct: 10, limitBps: 20, ttlSeconds: 300 });
 export const activeOrder = order => ["PENDING", "PARTIAL_FILLED"].includes(order.status);
@@ -252,11 +252,12 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
     const bestAsk = Math.min(...(book.asks ?? []).map(l => Number(l.price)).filter(p => p > 0));
     const bestBid = Math.max(...(book.bids ?? []).map(l => Number(l.price)).filter(p => p > 0));
     if (!(Number.isFinite(bestAsk) && Number.isFinite(bestBid) && bestAsk >= bestBid && bestBid > 0)) { order.note = "비정상 호가로 대기"; continue; }
-    if (order.side === 'SELL' && (order.reason?.includes('손절') || order.reason?.includes('보호 매도')) && levels.length &&
+    const protective = order.side === 'SELL' && /손절|보호 매도|추세 약화/.test(order.reason ?? '');
+    if (protective && levels.length &&
         time >= order.createdAt && time > (order.lastProtectionBook ?? -Infinity) &&
         now - order.createdAt >= 5000 && levels[0].price < order.limitPrice) {
       order.initialLimitPrice ??= order.limitPrice;
-      order.limitPrice = levels[0].price;
+      order.limitPrice = levels[0].price * (1 - order.config.limitBps / 10000);
       order.lastProtectionBook = time;
       order.reprices = (order.reprices ?? 0) + 1;
     }
@@ -265,7 +266,7 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
       if (order.side === "BUY" ? level.price > order.limitPrice : level.price < order.limitPrice) continue;
       const key = order.symbol + ":" + order.side + ":" + time + ":" + level.price;
       const used = state.liquidityUsage[key]?.quantity ?? 0;
-      let quantity = Math.min(order.quantity - order.filledQuantity, Math.max(0, Math.floor(level.volume * order.config.participationPct / 100) - used));
+      let quantity = Math.min(order.quantity - order.filledQuantity, Math.max(0, Math.floor(level.volume * (protective ? 100 : order.config.participationPct) / 100) - used));
       let position = state.positions.find(p => p.symbol === order.symbol);
       if (order.side === "SELL") quantity = Math.min(quantity, position?.quantity ?? 0);
       if (order.side === "BUY" && sold.has(order.symbol)) continue;

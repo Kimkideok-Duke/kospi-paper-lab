@@ -1,3 +1,4 @@
+import { groupTradeFills } from '/trade-groups.mjs';
 import { initPatterns } from './patterns.js?v=20261126-patterns1';
 import { initTradeChart } from './trade-chart.js?v=20261126-tv3';
 const $ = selector => document.querySelector(selector);
@@ -135,7 +136,8 @@ function emptyImage(image, title, description) {
   return '<div class="empty"><span class="metric-icon purple">' + icon(image) + "</span><strong>" + title + "</strong><span>" + description + "</span></div>";
 }
 
-function tradeList(trades, emptyText) {
+function tradeList(trades, emptyText, grouped = true) {
+  if (grouped) trades = groupTradeFills(trades);
   if (!trades.length) return emptyImage("list", emptyText, "기록된 거래의 금액과 손익이 여기에 표시됩니다.");
   return table(["체결 시각", "종목", "구분", "거래 금액", "매매 이유", "거래 실현손익", "총 평가자산"], trades.map(t => {
     const buy = t.side === "BUY";
@@ -143,11 +145,13 @@ function tradeList(trades, emptyText) {
       '</td><td class="symbol"><button type="button" class="trade-chart-link" data-trade-chart="' + safe(t.id) + '" aria-label="' + safe(t.name) + ' ' + (buy ? '매수' : '매도') + ' 차트 보기">' + safe(t.name) + ' <span aria-hidden="true">차트</span></button><span class="small">' +
       safe(t.symbol) + " · " + safe(t.type) + '</span></td><td><span class="side ' + (buy ? "buy" : "sell") + '">' +
       (buy ? "매수" : "매도") + '</span></td><td><strong>' + money(t.amount) + '</strong><div class="small">' +
-      n.format(t.quantity) + "주 × " + (t.market === "US" ? dollars(t.priceUsd) + " · 환율 " + fixed.format(t.fxRate) + "원" : money(t.price)) +
+      n.format(t.quantity) + (t.fills ? "주 · 평균 " : "주 × ") + (t.market === "US" ? dollars(t.priceUsd) + " · 환율 " + fixed.format(t.fxRate) + "원" : money(t.price)) +
       (t.costs ? '<div class="small">현금 정산 ' + money(t.cashAmount) + ' · 비용 ' + money(t.costs.commission + t.costs.transactionTax + t.costs.fxSpread) + '</div>' : '') + '</div></td><td class="reason">' + safe(t.reason) +
       '<div class="small">' + safe(t.strategyVersion ?? '이전 모의 방식') + '</div></td><td class="' +
       tone(t.realized) + '">' + signed(t.realized) + '</td><td class="total"><strong>' + money(t.total) +
-      '</strong><span class="small ' + tone(t.totalPnl) + '">누적 ' + signed(t.totalPnl) + "</span></td></tr>";
+      '</strong><span class="small ' + tone(t.totalPnl) + '">누적 ' + signed(t.totalPnl) + "</span></td></tr>" + (t.fills ?
+      '<tr><td colspan="7"><details><summary>부분 체결 ' + t.fills.length + '건 · 최초 ' + stamp(t.firstFillTime) +
+      ' · 상세 보기</summary>' + tradeList(t.fills, "", false) + '</details></td></tr>' : "");
   }));
 }
 
@@ -259,7 +263,7 @@ function render() {
   renderEvents(s.eventWatch);
 
   const reverse = [...s.trades].reverse();
-  $("#recent-list").innerHTML = tradeList(reverse.slice(0, 5), "아직 체결된 거래가 없습니다");
+  $("#recent-list").innerHTML = tradeList(groupTradeFills(reverse).slice(0, 5), "아직 체결된 거래가 없습니다", false);
   const filtered = reverse.filter(trade => filter === "ALL" || filter === trade.side);
   setText("#trade-count", (filter === "ALL" ? "전체" : filter === "BUY" ? "매수" : "매도") + " " + n.format(filtered.length) + "건");
   $("#trade-list").innerHTML = tradeList(filtered, "선택한 조건에 맞는 거래가 없습니다");

@@ -7,6 +7,7 @@ process.chdir(root);
 await Promise.all([mkdir("dist/server", { recursive: true }), mkdir("dist/.openai", { recursive: true })]);
 const resources = {
   "/": ["text/html; charset=utf-8", "index.html"],
+  "/trade-groups.mjs": ["text/javascript; charset=utf-8", "trade-groups.mjs"],
   "/app.js": ["text/javascript; charset=utf-8", "app.js"],
   "/patterns.js": ["text/javascript; charset=utf-8", "patterns.js"],
   "/vendor/lightweight-charts/lightweight-charts.mjs": ["text/javascript; charset=utf-8", "vendor/lightweight-charts/lightweight-charts.mjs"],
