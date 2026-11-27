@@ -4,11 +4,13 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { initialState, execute, account, sellReason, slotFor, slotTime } from "../server/engine.mjs";
 import { initialUsState, executeUs, usAccount, usLocalTime } from "../server/us-engine.mjs";
-import { upgradePaper, setPaperConfig, defaults } from "../server/paper-model.mjs";
+import { upgradePaper as upgradeWithRisk, setPaperConfig, defaults } from "../server/paper-model.mjs";
 import { analyticsView, recordAnalytics } from "../server/paper-analytics.mjs";
 import { startMonitorBatch } from "../server/monitor-batch.mjs";
 import "../scripts/build.mjs";
 const { default: app, runMonitor } = await import("../dist/server/index.js");
+// Cost/depth fixtures isolate execution arithmetic from capital allocation.
+const upgradePaper = (...args) => { const state = upgradeWithRisk(...args); state.capitalRisk.enabled = false; return state; };
 const now = Date.parse("2026-11-25T10:00:00+09:00");
 const start = now - 3600000, end = now + 5 * 3600000;
 const candidate = (symbol = "005930", type = "주식") => ({ symbol, name: "테스트", type, momentum: 1.2, validPrice: () => true, reason: "테스트 조건" });
@@ -351,4 +353,53 @@ test("overheated candidate records alternatives and later quote without spending
   assert.equal(row.afterPrice,9900);
   assert.deepEqual(Object.values(row.probes).map(p=>p.quantity),[3,3,3]);
   assert.equal(s.cash,10000000);
+});
+
+test("capital limits include reservations and preserve cash on a normal fresh signal", () => {
+  const s=upgradeWithRisk(initialState(),"KR",now);
+  execute(s,{...context(),candidates:[candidate()]});
+  const order=s.paperOrders[0];
+  assert.equal(order.executionStyle,"RESTING_ENTRY");
+  assert.ok(order.quantity*order.limitPrice < 1500000);
+  assert.equal(s.cash,10000000);
+  assert.ok(s.capitalRisk.enabled);
+});
+test("one percent session loss latches entry pause without forcing a sale and resets next session", () => {
+  const s=upgradeWithRisk(initialState(),"KR",now);
+  s.cash=9000000;
+  s.positions=[{symbol:"005930",name:"테스트",type:"주식",quantity:100,entry:10000,price:10000,quoteTime:now}];
+  execute(s,context());
+  execute(s,context(now+5000,9900));
+  // A one-percent move of a ten-percent position is 0.1 percent at account level.
+  assert.equal(s.riskSession.paused,false);
+  s.riskSession.baseline=10100000;
+  execute(s,context(now+10000,10000));
+  assert.equal(s.riskSession.paused,false);
+  s.riskSession.baseline=10200000;
+  const rows=execute(s,{...context(now+15000),candidates:[candidate("OTHER")]});
+  assert.equal(s.riskSession.paused,true);
+  assert.equal(rows.length,0);
+  assert.equal(s.positions.length,1);
+  execute(s,context(now+20000,10050));
+  assert.equal(s.riskSession.paused,true);
+  const next=context(now+86400000,10000);
+  next.regularStart=start+86400000;next.regularEnd=end+86400000;
+  execute(s,next);
+  assert.equal(s.riskSession.paused,false);
+});
+test("daily pause cancels outstanding entry orders, even on a monitor cycle", () => {
+  const s=upgradeWithRisk(initialState(),"KR",now);
+  execute(s,{...context(),candidates:[candidate()]});
+  s.cash-=110000;
+  execute(s,{...context(now+5000,9900),monitor:true});
+  assert.equal(s.paperOrders[0].status,"CANCELED");
+  assert.equal(s.trades.length,0);
+});
+test("capital preservation defers cautioned and overheated candidates", () => {
+  for(const c of [{...candidate(),news:{caution:true}},{...candidate(),momentum:2.1}]) {
+    const s=upgradeWithRisk(initialState(),"KR",now);
+    execute(s,{...context(),candidates:[c]});
+    assert.equal(s.paperOrders.length,0);
+    assert.ok(s.entryObservations[0].decision);
+  }
 });

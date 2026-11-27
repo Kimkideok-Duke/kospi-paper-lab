@@ -1,3 +1,4 @@
+import { upgradePaper as upgradeCostFixture } from '../server/paper-model.mjs';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -134,6 +135,10 @@ test("opening news informs ETF entry without reducing allocation and an off-sche
   const storage = JSON.stringify(database.prepare("SELECT * FROM campaign").get());
   assert.ok(!storage.includes("sample-key"));
   assert.ok(!storage.includes("only-test-token"));
+  // Keep authentication, deduplication and cost arithmetic on their fixed allocation fixture.
+  const costFixture = upgradeCostFixture(JSON.parse(database.prepare("SELECT state FROM campaign WHERE id=1").get().state), "KR", Date.now());
+  costFixture.capitalRisk.enabled = false;
+  database.prepare("UPDATE campaign SET state=? WHERE id=1").run(JSON.stringify(costFixture));
   const first = await runSlot(env);
   assert.equal(first.status, "ok");
   assert.equal(first.trades.length, 1);

@@ -1,5 +1,5 @@
 import { activateDailyPolicy } from "./strategy-policy.mjs";
-export const MODEL_VERSION = "paper-v7-protective-exits";
+export const MODEL_VERSION = "paper-v8-capital-preservation";
 export const defaults = market => ({ commissionBps: market === "US" ? 10 : 1.5, taxBps: market === "US" ? 0 : 20,
   fxSpreadBps: market === "US" ? 10 : 0, participationPct: 10, limitBps: 20, ttlSeconds: 300 });
 export const activeOrder = order => ["PENDING", "PARTIAL_FILLED"].includes(order.status);
@@ -16,9 +16,10 @@ export function upgradePaper(state, market, now) {
   if (!state.paperModel || state.paperModel.code !== MODEL_VERSION) {
     const config = state.paperModel?.config ?? defaults(market);
     for (const order of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) { order.status = "CANCELED"; order.note = "전략 버전 변경: 다음 분석에서 새 규칙으로 평가"; }
+    state.capitalRisk = { enabled:true, positionPct:15, exposurePct:60, tradeRiskPct:0.35, dailyPausePct:1 };
     state.paperModel = { enabled: true, code: MODEL_VERSION, version: MODEL_VERSION + ":" + (state.versions.length + 1), config, appliedAt: now };
     state.versions.push({ id: state.paperModel.version, time: now, baseline: paperTotal(state, market),
-      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 5초 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · 급등 추격 제한 · 손절 후 30분 대기 · 보호 매도 잔량 재평가 · −2.5%/+5%" });
+      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 5초 보유 감시 · 호가 잔량 10% · 5종목 · 종목당 최대15% · 전체 투자60% · 일손실1% 매수중지 · 장중 뉴스 2분/공시 1분 · 급등 추격 제한 · 손절 후 30분 대기 · 보호 매도 잔량 재평가 · −2.5%/+5%" });
   }
   activateDailyPolicy(state, market, now);
   if (state.monitorPolicy?.intervalMs !== 5000) {
@@ -105,6 +106,18 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
     order.status = "EXPIRED"; order.note = order.filledQuantity ? "잔량 유효시간 종료" : "미체결 유효시간 종료";
   }
   if (review || now < regularStart || now >= regularEnd) return [];
+  const risk = state.capitalRisk;
+  const equity = paperTotal(state, market);
+  const valuationsFresh = state.positions.every(p => fresh(quotes.get(p.symbol)));
+  if (risk?.enabled && valuationsFresh && state.riskSession?.start !== regularStart) {
+    state.riskSession = { start:regularStart, baseline:equity, initializedAt:now, paused:false };
+  }
+  const session = state.riskSession;
+  if (risk?.enabled && valuationsFresh && session?.start === regularStart && session.baseline > 0) {
+    session.lossPct = Math.max(0,(1-equity/session.baseline)*100);
+    session.paused ||= session.lossPct >= risk.dailyPausePct;
+  }
+  const riskPause = risk?.enabled && (!valuationsFresh || session?.paused || !(equity > 0));
   const source = event ? "event" : monitor ? "monitor" : manual ? "manual" : "batch", trades = [], sold = new Set();
   const pending = (symbol, side) => state.paperOrders.some(o => activeOrder(o) && o.symbol === symbol && o.side === side);
   function newOrder(stock, side, quantity, quote, reason, plan = {}) {
@@ -118,7 +131,7 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
   }
   for (const o of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) {
     const q = quotes.get(o.symbol);
-    if ((state.eventWatch?.blocks?.[o.symbol]?.until ?? 0) > now ||
+    if (riskPause || (state.eventWatch?.blocks?.[o.symbol]?.until ?? 0) > now ||
       (o.executionStyle === "RESTING_ENTRY" && fresh(q) && (q.price < o.reference * .985 || q.price > o.reference * 1.01))) {
       o.status = "CANCELED"; o.note = "악재 또는 주문 기준가 이탈로 매수 잔량 취소";
     }
@@ -170,8 +183,16 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
       observation.decision = '손절 후 30분 대기';
       continue;
     }
-    if (c.momentum >= 3) {
-      observation.decision = '최근 분봉 3% 이상 급등';
+    if (riskPause) {
+      observation.decision = '당일 손실 한도 또는 평가 자료 확인 대기';
+      continue;
+    }
+    if (risk?.enabled && c.news?.caution) {
+      observation.decision = '뉴스 주의 종목 보류';
+      continue;
+    }
+    if (c.momentum >= (risk?.enabled ? 2 : 3)) {
+      observation.decision = risk?.enabled ? '최근 분봉 2% 이상 급등' : '최근 분봉 3% 이상 급등';
       continue;
     }
     const occupied = new Set([...state.positions.map(p => p.symbol), ...state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY").map(o => o.symbol)]);
@@ -179,8 +200,25 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
     const q = quotes.get(c.symbol);
     if (!fresh(q) || !c.validPrice(q.price)) continue;
     const reserved = state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY").reduce((sum, o) => sum + amounts(o.limitPrice, o.quantity - o.filledQuantity, "BUY", o.type, market, fx.rate, o.config).settlement, 0);
-    const budget = Math.max(0, state.cash - reserved);
-    const immediate = event || (Number.isFinite(c.momentum) && c.momentum >= 1 && !c.news?.caution);
+    let budget = Math.max(0, state.cash - reserved);
+    if (risk?.enabled) {
+      const heldValue = equity - state.cash;
+      const roundTripCostPct = (2*config.commissionBps + config.taxBps + 2*config.fxSpreadBps)/100;
+      const stopRiskBudget = equity * risk.tradeRiskPct / (2.5 + roundTripCostPct);
+      budget = Math.max(0,Math.min(budget, equity*risk.positionPct/100,
+        equity*risk.exposurePct/100-heldValue-reserved,stopRiskBudget));
+      const book = books.get(c.symbol);
+      const stamp = Date.parse(book?.timestamp);
+      const ask = Math.min(...(book?.asks ?? []).filter(l=>Number(l.volume)>0).map(l=>Number(l.price)).filter(p=>p>0));
+      const bid = Math.max(...(book?.bids ?? []).filter(l=>Number(l.volume)>0).map(l=>Number(l.price)).filter(p=>p>0));
+      if (book?.currency !== (market==='US'?'USD':'KRW') || stamp < now-30000 || stamp > now+3000 ||
+          !Number.isFinite(stamp) || !(Number.isFinite(ask)&&Number.isFinite(bid)&&bid>0&&ask>=bid) ||
+          (ask/bid-1)*100 > 0.2) {
+        observation.decision = '최신 호가 또는 0.2% 호가 간격 조건 미충족';
+        continue;
+      }
+    }
+    const immediate = !risk?.enabled && (event || (Number.isFinite(c.momentum) && c.momentum >= 1 && !c.news?.caution));
     const limit = q.price * (1 + (immediate ? 1 : -1) * config.limitBps / 10000);
     if (!(limit > 0) || (!immediate && !c.validPrice(limit))) continue;
     let quantity = Math.floor(budget / (limit * fx.rate * (1 + (config.commissionBps + config.fxSpreadBps) / 10000)));
@@ -199,6 +237,11 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
   }
   const orders = state.paperOrders.filter(activeOrder).sort((a, b) => (a.side === "SELL" ? 0 : 1) - (b.side === "SELL" ? 0 : 1));
   for (const order of orders) {
+    if (risk?.enabled && order.side === 'BUY' && state.riskSession?.paused) {
+      order.status = 'CANCELED';
+      order.note = '당일 손실 한도 도달';
+      continue;
+    }
     const q = quotes.get(order.symbol), book = books.get(order.symbol), time = Date.parse(book?.timestamp);
     if (!fresh(q) || book?.currency !== (market === "US" ? "USD" : "KRW") || !Number.isFinite(time) || time < regularStart || time > now + 3000 || now - time > 30_000) {
       order.note = "최신 체결가·호가가 없어 대기";
@@ -209,7 +252,7 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
     const bestAsk = Math.min(...(book.asks ?? []).map(l => Number(l.price)).filter(p => p > 0));
     const bestBid = Math.max(...(book.bids ?? []).map(l => Number(l.price)).filter(p => p > 0));
     if (!(Number.isFinite(bestAsk) && Number.isFinite(bestBid) && bestAsk >= bestBid && bestBid > 0)) { order.note = "비정상 호가로 대기"; continue; }
-    if (order.side === 'SELL' && order.reason?.includes('손절') && levels.length &&
+    if (order.side === 'SELL' && (order.reason?.includes('손절') || order.reason?.includes('보호 매도')) && levels.length &&
         time >= order.createdAt && time > (order.lastProtectionBook ?? -Infinity) &&
         now - order.createdAt >= 5000 && levels[0].price < order.limitPrice) {
       order.initialLimitPrice ??= order.limitPrice;
@@ -228,7 +271,16 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
       if (order.side === "BUY" && sold.has(order.symbol)) continue;
       let costs = amounts(level.price, quantity, order.side, order.type, market, fx.rate, order.config);
       const otherReserved = order.side === "BUY" ? state.paperOrders.filter(o => o !== order && activeOrder(o) && o.side === "BUY").reduce((sum, o) => sum + amounts(o.limitPrice, o.quantity - o.filledQuantity, "BUY", o.type, market, fx.rate, o.config).settlement, 0) : 0;
-      while (quantity > 0 && order.side === "BUY" && costs.settlement > Math.max(0, state.cash - otherReserved)) costs = amounts(level.price, --quantity, order.side, order.type, market, fx.rate, order.config);
+      let available = Math.max(0, state.cash - otherReserved);
+      if (risk?.enabled && order.side === 'BUY') {
+        const currentEquity = paperTotal(state, market);
+        const currentHeld = currentEquity - state.cash;
+        const symbolHeld = position ? (market === 'US' ? position.valueKrw : position.price * position.quantity) : 0;
+        available = Math.max(0, Math.min(available,
+          currentEquity * risk.positionPct/100 - symbolHeld,
+          currentEquity * risk.exposurePct/100 - currentHeld - otherReserved));
+      }
+      while (quantity > 0 && order.side === "BUY" && costs.settlement > available) costs = amounts(level.price, --quantity, order.side, order.type, market, fx.rate, order.config);
       if (quantity < 1) continue;
       let realized = 0, priceEffectKrw = 0, fxEffectKrw = 0;
       if (order.side === "BUY") {

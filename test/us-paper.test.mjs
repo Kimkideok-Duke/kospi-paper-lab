@@ -1,3 +1,4 @@
+import { upgradePaper as upgradeCostFixture } from '../server/paper-model.mjs';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -193,6 +194,11 @@ test("US API persists a separate account, shares one token, and deduplicates man
   assert.equal(beforeConnection.initial, 10_000_000);
   assert.equal(beforeConnection.connected, false);
   assert.equal((await request("/api/connect", { id: "fake-id", secret: "fake-secret" })).status, 200);
+  // Keep authentication, deduplication and cost arithmetic on their fixed allocation fixture.
+  await request("/api/us/state");
+  const costFixture = upgradeCostFixture(JSON.parse(db.prepare("SELECT state FROM us_campaign WHERE id=1").get()?.state ?? JSON.stringify(initialUsState())), "US", Date.now());
+  costFixture.capitalRisk.enabled = false;
+  db.prepare("INSERT OR REPLACE INTO us_campaign(id,state) VALUES(1,?)").run(JSON.stringify(costFixture));
   const domesticBefore = db.prepare("SELECT state FROM campaign WHERE id=1").get().state;
   const payload = { requestId: "00000000-0000-4000-8000-000000000001" };
   assert.equal((await request("/api/us/manual-run", payload, true, "https://other.example")).status, 403);
