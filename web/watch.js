@@ -7,10 +7,37 @@ function cell(row,value,cls=''){const td=document.createElement('td');td.textCon
 function instrumentCell(row,p){const td=cell(row,p.name||p.symbol),small=document.createElement('small');small.textContent=p.symbol;td.append(small);}
 const percentage=v=>Number.isFinite(v)?(v>0?'+':'')+n.format(v)+'%':'—';
 function svgNode(svg,tag,attributes={},label){const node=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [key,value] of Object.entries(attributes))node.setAttribute(key,String(value));if(label!==undefined)node.textContent=label;svg.append(node);return node;}
+function bindEquityHover(svg,points,{width,left,right,top,bottom,from,until,X,Y}){
+  const rows=points.filter(p=>Number.isFinite(p.time)&&Number.isFinite(p.value)).sort((a,b)=>a.time-b.time);
+  svg.onpointermove=svg.onpointerdown=svg.onpointerleave=svg.onpointercancel=svg.onfocus=svg.onblur=svg.onkeydown=null;
+  if(!rows.length){svg.equityHoverFraction=null;return;}
+  const cursor=svgNode(svg,'g',{visibility:'hidden','pointer-events':'none'}),vertical=svgNode(cursor,'line',{y1:top,y2:bottom,stroke:'#5a7890','stroke-dasharray':'4 4'}),dot=svgNode(cursor,'circle',{r:4,fill:'#247896',stroke:'#fff','stroke-width':2});
+  const box=svgNode(cursor,'g',{role:'tooltip'}),boxWidth=Math.min(260,width-20),boxHeight=66;
+  svgNode(box,'rect',{width:boxWidth,height:boxHeight,rx:8,fill:'#17394f'});
+  const when=svgNode(box,'text',{x:12,y:24,class:'hover-time'}),value=svgNode(box,'text',{x:12,y:48,class:'hover-value'});let selected=rows.length-1;
+  function show(index){
+    selected=index;const point=rows[index],x=X(point.time),y=Y(point.value);
+    cursor.setAttribute('visibility','visible');vertical.setAttribute('x1',x);vertical.setAttribute('x2',x);dot.setAttribute('cx',x);dot.setAttribute('cy',y);
+    box.setAttribute('transform','translate('+Math.max(5,Math.min(width-boxWidth-5,x+14))+','+Math.max(top,Math.min(bottom-boxHeight,y-boxHeight-12))+')');
+    when.textContent=time(point.time)+(market==='US'?' 미국 동부':' 한국');value.textContent='평가자산 '+won(point.value);
+    svg.setAttribute('aria-label','평가자산 추이 · '+when.textContent+' · '+value.textContent);
+  }
+  function showFraction(fraction){
+    svg.equityHoverFraction=Math.max(0,Math.min(1,fraction));const target=from+(until-from)*svg.equityHoverFraction;
+    let best=0;for(let i=1;i<rows.length;i++)if(Math.abs(rows[i].time-target)<Math.abs(rows[best].time-target))best=i;
+    show(best);
+  }
+  const hide=()=>{cursor.setAttribute('visibility','hidden');svg.equityHoverFraction=null;svg.setAttribute('aria-label','평가자산 추이 · 마우스 또는 터치로 관측 시각과 평가금액 확인');};
+  const pointer=event=>{const rect=svg.getBoundingClientRect();if(!(rect.width>0))return;const x=(event.clientX-rect.left)*width/rect.width;if(x<left||x>width-right){hide();return;}showFraction((x-left)/(width-left-right));};
+  svg.onpointermove=svg.onpointerdown=pointer;svg.onpointerleave=event=>{if(event.pointerType!=='touch')hide();};svg.onpointercancel=hide;
+  svg.setAttribute('tabindex','0');svg.onfocus=()=>showFraction(Number.isFinite(svg.equityHoverFraction)?svg.equityHoverFraction:1);svg.onblur=hide;
+  svg.onkeydown=event=>{if(event.key==='Escape'){hide();return;}if(!['ArrowLeft','ArrowRight'].includes(event.key))return;event.preventDefault();selected=Math.max(0,Math.min(rows.length-1,selected+(event.key==='ArrowRight'?1:-1)));svg.equityHoverFraction=(rows[selected].time-from)/(until-from);show(selected);};
+  if(Number.isFinite(svg.equityHoverFraction))showFraction(svg.equityHoverFraction);else hide();
+}
 function plot(svg,series,{percent=false}={}){
   svg.replaceChildren();const width=Math.max(340,svg.clientWidth||900),height=280,left=percent?66:100,right=20,top=30,bottom=height-65;
   svg.setAttribute('viewBox','0 0 '+width+' '+height);
-  const points=series.flatMap(s=>s.points).filter(p=>Number.isFinite(p.time)&&Number.isFinite(p.value));if(!points.length)return false;
+  const points=series.flatMap(s=>s.points).filter(p=>Number.isFinite(p.time)&&Number.isFinite(p.value));if(!points.length){if(!percent)bindEquityHover(svg,[],{});return false;}
   const from=Math.min(...points.map(p=>p.time)),until=Math.max(from+60000,...points.map(p=>p.time));
   const values=points.map(p=>p.value),low=Math.min(...values,...(percent?[0]:[])),high=Math.max(...values,...(percent?[0]:[])),padding=Math.max((high-low)*.08,percent?.1:1);
   const min=low-padding,max=high+padding,X=t=>left+(width-left-right)*(t-from)/(until-from),Y=v=>bottom-(bottom-top)*(v-min)/(max-min);
@@ -24,7 +51,7 @@ function plot(svg,series,{percent=false}={}){
   svgNode(svg,'text',{x:8,y:16,class:'axis-label'},percent?'수익률 (%)':'금액 (원)');svgNode(svg,'text',{x:width-right,y:height-3,'text-anchor':'end',class:'axis-label'},market==='US'?'시간 (미국 동부)':'시간 (한국)');
   for(const s of series){const rows=s.points.filter(p=>Number.isFinite(p.time)&&Number.isFinite(p.value)).sort((a,b)=>a.time-b.time);if(!rows.length)continue;
     svgNode(svg,'polyline',{points:rows.map(p=>X(p.time)+','+Y(p.value)).join(' '),fill:'none',stroke:s.color,'stroke-width':2.5});if(rows.length===1)svgNode(svg,'circle',{cx:X(rows[0].time),cy:Y(rows[0].value),r:3,fill:s.color});
-  }return true;
+  }if(!percent)bindEquityHover(svg,series[0]?.points??[],{width,left,right,top,bottom,from,until,X,Y});return true;
 }
 function renderComparison(p){
   const benchmarks=p.benchmarks??[],body=$('#benchmark-rows'),legend=$('#benchmark-legend');body.replaceChildren();legend.replaceChildren();

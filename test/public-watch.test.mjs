@@ -56,8 +56,17 @@ test('public charts label money/time axes, preserve irregular elapsed time and c
   assert.ok(chart.children.some(n=>n.textContent==='금액 (원)'));assert.ok(chart.children.some(n=>n.textContent==='시간 (한국)'));
   assert.ok(get('#benchmark-chart').children.some(n=>n.textContent==='수익률 (%)'));
   assert.equal(get('#benchmark-rows').children[0].children.at(-1).textContent,'-1%p');
+  // Pointer coordinates can be CSS-scaled; show the nearest saved observation, not interpolated money.
+  chart.getBoundingClientRect=()=>({left:20,width:450});
+  const labels=node=>[node.textContent,...node.children.flatMap(labels)];
+  chart.onpointermove({clientX:20+(100+780*.1)/2,pointerType:'mouse'});
+  assert.ok(labels(chart).includes('평가자산 10,000,500원'));
+  chart.onpointerdown({clientX:20+100/2,pointerType:'touch'});chart.onfocus();chart.onpointerleave({pointerType:'touch'});
+  assert.ok(labels(chart).includes('평가자산 10,000,000원'));assert.equal(chart.children.at(-1).attributes.visibility,'visible');
+  chart.onpointerleave({pointerType:'mouse'});assert.equal(chart.children.at(-1).attributes.visibility,'hidden');
   chart.clientWidth=360;vm.runInContext('market="US"; plot(document.querySelector("#chart"),[{color:"blue",points:[{time:1,value:10000000}]}]);',context);
   assert.ok(chart.children.some(n=>n.textContent==='시간 (미국 동부)'));assert.ok(chart.children.every(n=>!JSON.stringify(n.attributes).includes('NaN')));assert.match(chart.attributes.viewBox,/360 280$/);
+  chart.onfocus();chart.onkeydown({key:'ArrowLeft',preventDefault(){}});assert.ok(labels(chart).some(s=>s.includes('미국 동부')));chart.onkeydown({key:'Escape'});assert.equal(chart.children.at(-1).attributes.visibility,'hidden');
 });
 test('dedicated public gateway blocks login, private APIs, file/traversal and mutation routes even with owner cookies; only viewer cookie and allowlisted headers pass',async t=>{
   const seen=[],backend=http.createServer((req,res)=>{seen.push({path:req.url,headers:req.headers});res.setHeader('content-type','application/json');res.setHeader('content-security-policy',"default-src 'none'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'");res.setHeader('x-frame-options','DENY');res.setHeader('x-owner-email','PRIVATE_MARKER');res.end('{}');});
