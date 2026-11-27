@@ -26,6 +26,7 @@ function fixture(t) {
 }
 test('sessions gate every account route, forged identities and cross-origin login cannot bypass authentication', async t => {
   const { call } = fixture(t);
+  for(const path of ['/api/reviews/charts','/api/us/reviews/charts']) assert.equal((await call(path,{date:'2026-11-25'})).status,401);
   for (const path of ['/api/state','/api/us/state','/api/quotes','/api/us/quotes','/api/health','/api/reviews','/api/us/reviews','/api/patterns','/api/us/patterns','/api/trade-chart?id=1','/api/us/trade-chart?id=1']) assert.equal((await call(path, undefined, '', { 'oai-authenticated-user-id': 'owner' })).status, 401);
   assert.equal((await call('/')).status, 303);
   assert.equal((await call('/login')).status, 200);
@@ -37,14 +38,24 @@ test('owner data survives migration; invited users have separate KR/US balances,
   const { call, login, register, root, masterKey, host } = fixture(t);
   const db = new DatabaseSync(join(root,'campaign.sqlite'));
   const state = initialState(); state.reviews = { "2026-11-25": { date: "2026-11-25", summary: { equityPnl: 100, realized: 50 }, adaptive: { changed: false }, overview: "owner-private-review" } }; state.cash = 7654321; state.trades.push({ id: 'historic-owner', side: 'BUY', amount: 12345, symbol:'005930', name:'Owner private trade', time:Date.parse('2026-11-25T10:00:00+09:00'), quantity:1, price:12345 });
+  state.reviewDayCharts={'2026-11-25':{status:'complete',revision:1,confirmed:1,targets:[{symbol:'005930'}],records:{'005930':{status:'confirmed',checkedAt:Date.parse('2026-11-25T16:00:00+09:00'),candles:[{time:Date.parse('2026-11-25T15:30:00+09:00'),open:12300,high:12400,low:12200,close:12390,volume:100}]}}}};
   db.prepare('INSERT INTO campaign(id,state) VALUES(1,?)').run(JSON.stringify(state)); db.close();
   const owner = await login(), member = await register(owner);
+  for(const path of ['/api/reviews/charts','/api/us/reviews/charts']) {
+    assert.equal((await call(path,{date:'2026-02-30'},owner)).status,400);
+    assert.equal((await call(path,{date:'2026-11-25'},owner,{origin:'https://evil.example'})).status,403);
+    assert.equal((await call(path,{date:'2026-11-25'},member.cookie,{'oai-authenticated-user-id':'owner'})).status,404);
+  }
+  assert.equal((await call('/api/reviews/charts',{date:'2026-11-25'},owner)).status,503);
   assert.match(owner, /marketlab_session=/);
   const ownerState = await (await call('/api/state', undefined, owner)).json();
   assert.equal((await (await call('/api/reviews?date=2026-11-25', undefined, owner)).json()).report.overview, 'owner-private-review');
   assert.equal((await (await call('/api/reviews?date=2026-11-25', undefined, member.cookie, { 'oai-authenticated-user-id': 'owner' })).json()).report, null);
   assert.equal((await call('/api/reviews?date=invalid', undefined, owner)).status, 400);
   assert.equal((await call('/api/trade-chart?id=historic-owner',undefined,owner)).status,200);
+  const dayChart=await (await call('/api/trade-chart?id=historic-owner&date=2026-11-25',undefined,owner)).json();
+  assert.equal(dayChart.candles[0].close,12390);assert.equal(dayChart.candleStatus,'complete');
+  assert.equal((await call('/api/trade-chart?id=historic-owner&date=2026-11-25',undefined,member.cookie,{'oai-authenticated-user-id':'owner'})).status,404);
   assert.equal((await call('/api/trade-chart?id=historic-owner&user=owner',undefined,member.cookie,{'oai-authenticated-user-id':'owner'})).status,404);
   assert.equal((await call('/api/us/trade-chart?id=historic-owner',undefined,owner)).status,404);
   for (const path of ['/api/trade-chart','/api/us/trade-chart']) {

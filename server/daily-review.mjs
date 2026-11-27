@@ -96,6 +96,6 @@ export function reviewCalendar(state,market,now){
   const today=marketDate(now,market),dates=[...new Set([...(state.daily??[]).map(d=>d.date),...state.trades.map(t=>marketDate(t.time,market)),...Object.keys(state.reviews??{})])].sort();
   return {market,today,policy:strategyPolicy(state),pending:state.dailyPolicy?.pending??null,applied:(state.dailyPolicy?.applied??[]).slice(-10),days:dates.map(date=>{
     const report=closingReview(state,state.reviews?.[date]),daily=(state.daily??[]).find(d=>d.date===date),prior=(state.daily??[]).filter(d=>d.date<date).sort((a,b)=>a.date.localeCompare(b.date)).at(-1),trades=state.trades.filter(t=>marketDate(t.time,market)===date);
-    const audit=state.reviewCloseAudits?.[date];
-    return {date,status:report?'final':date===today?'pending':'unavailable',equityPnl:report?report.summary.equityPnl:(daily?daily.close-(prior?.close??daily.open):null),realized:report?.summary.realized??sum(trades.filter(t=>t.side==='SELL'),t=>t.realized),fillCount:trades.length,changed:report?.adaptive.changed??false,closingRevision:audit?audit.status+':'+(audit.revision??0):'legacy'};})};
+    const audit=state.reviewCloseAudits?.[date],charts=state.reviewDayCharts?.[date];
+    return {date,status:report?'final':date===today?'pending':'unavailable',equityPnl:report?report.summary.equityPnl:(daily?daily.close-(prior?.close??daily.open):null),realized:report?.summary.realized??sum(trades.filter(t=>t.side==='SELL'),t=>t.realized),fillCount:trades.length,changed:report?.adaptive.changed??false,closingRevision:(audit?audit.status+':'+(audit.revision??0):'legacy')+(charts?':chart:'+charts.status+':'+(charts.revision??0):'')};})};
 }

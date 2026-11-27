@@ -1,6 +1,9 @@
 import {marketDate} from './strategy-policy.mjs';
 const MINUTE=60000;
 export function chartRange(chart,now){
+  if(Number.isFinite(chart.session?.start)&&Number.isFinite(chart.session?.end)&&chart.session.end>chart.session.start){
+    return {from:chart.session.start,until:Math.min(now,chart.session.end)};
+  }
   if(chart.date){
     const midnight=Date.parse(chart.date+'T00:00:00Z');let from=midnight-14*3600000;
     while(marketDate(from,chart.market)<chart.date)from+=3600000;

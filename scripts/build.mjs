@@ -43,6 +43,7 @@ await Promise.all([
   copy("server/market-events.mjs", "dist/server/market-events.mjs"),
   copy("server/daily-review.mjs", "dist/server/daily-review.mjs"),
   copy("server/stock-review.mjs", "dist/server/stock-review.mjs"),
+  copy("server/day-chart-review.mjs", "dist/server/day-chart-review.mjs"),
   copy("server/closing-audit.mjs", "dist/server/closing-audit.mjs"),
   copy("server/chart-patterns.mjs", "dist/server/chart-patterns.mjs"),
   copy("server/chart-candles.mjs", "dist/server/chart-candles.mjs"),

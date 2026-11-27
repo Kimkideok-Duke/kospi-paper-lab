@@ -14,6 +14,7 @@ import { stockReview } from "./stock-review.mjs";
 import { loadChartCandles } from "./chart-candles.mjs";
 import { tradeChart } from "./trade-chart.mjs";
 import { collectClosingAudits, closingReview } from "./closing-audit.mjs";
+import { collectDayCharts } from "./day-chart-review.mjs";
 
 const encode = new TextEncoder();
 const decode = new TextDecoder();
@@ -279,6 +280,22 @@ function usView(row, credentials, env) {
     fxMode: "거래 시점 매매기준율로 원화 정산", selection: "NASDAQ·NYSE·AMEX 거래대금 상위 100종목 중 주식·ETF" };
 }
 
+async function refreshReviewCharts(env,market,date){
+  return locked(env,async(credentials,write,owner)=>{
+    const row=market==='US'?await usRecord(env):credentials;
+    const state=row?JSON.parse(row.state):null;
+    if(!state||!state.trades.some(t=>(market==='US'?usDate(t.time):kst(t.time).slice(0,10))===date))throw new RequestError(404,'이 거래일의 거래 기록이 없습니다.');
+    const token=credentials.access_token?await openSecret(env,credentials.access_token,'toss:token'):null;
+    if(!credentials.secrets||!token?.value||token.expires<=Date.now()+10000)throw new RequestError(503,'분봉 조회에 사용할 유효한 API 연결이 필요합니다. 서버 감시의 토큰 갱신 후 다시 확인해 주세요.');
+    const progress=await collectDayCharts(state,market,marketClient(token.value),env.DB,Date.now(),{date});
+    if(market==='US'){
+      const saved=await env.DB.prepare('UPDATE us_campaign SET state=? WHERE id=1 AND EXISTS(SELECT 1 FROM campaign WHERE id=1 AND lock_owner=? AND lock_until>?)').bind(JSON.stringify(state),owner,Date.now()).run();
+      if(!saved.meta.changes)throw new RequestError(409,'차트 보완 저장 잠금 시간이 초과되었습니다.');
+    }else await write(state,credentials.secrets,credentials.access_token);
+    const a=state.reviewDayCharts?.[date];
+    return {date,...progress,status:a?.status??'waiting',confirmed:a?.confirmed??0,total:a?.targets?.length??0};
+  });
+}
 async function runMonitor(env, now = Date.now()) {
   const results = [], triggers = [];
   for (const market of ["KR", "US"]) {
@@ -365,6 +382,7 @@ async function runMonitor(env, now = Date.now()) {
             ingestEvents(draft, snapshot, market, Date.now());
             for (const order of draft.paperOrders.filter(activeOrder)) { order.status = "EXPIRED"; order.note = "정규장 종료"; }
             await collectClosingAudits(draft,market,reads,Date.now());
+            await collectDayCharts(draft,market,reads,env.DB,Date.now());
             draft.operations.status = "closed"; recordAnalytics(draft, market, now); syncDailyReviews(draft,market,Date.now()); await persist(draft); return { status: "outside" };
           }
           const snapshot = await (env.collectEvents ?? (m => marketEvents.collect(m)))(market);
@@ -506,10 +524,17 @@ async function handler(request, env) {
       const market = pathname.includes("/us/") ? "US" : "KR", row = market === "US" ? await usRecord(env) : await record(env);
       const date = new URL(request.url).searchParams.get("date");
       if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new RequestError(400, "날짜 형식을 확인해 주세요.");
-      const result = tradeChart(row ? JSON.parse(row.state) : { trades: [] }, market, id, Date.now(), date);
+      const chartState=row?JSON.parse(row.state):{trades:[]};
+      const result = tradeChart(chartState, market, id, Date.now(), date);
       if (!result) throw new RequestError(404, "해당 거래를 찾을 수 없습니다.");
       const credentials=market==='KR'?row:await record(env);
       result.candles=[];result.candleStatus='unavailable';
+      const savedDay=date?chartState.reviewDayCharts?.[date]?.records?.[result.symbol]:null;
+      if(savedDay?.status==='confirmed'){
+        result.candles=savedDay.candles;result.candleStatus='complete';result.candleCheckedAt=savedDay.checkedAt;
+        result.note='마감 후 별도 저장한 해당 거래일 정규장 1분봉 OHLCV · 수정주가 미적용 · 봉 종료 시각. 회색 공백은 관측되지 않은 구간이며 당시 판단과 사후 가격을 구분해야 합니다.';
+        return json(result);
+      }
       try {
         // Reuse the running app's token. Popup reads never issue/revoke a token or lock the trading ledger.
         const token=credentials?.secrets&&credentials?.access_token?await openSecret(env,credentials.access_token,'toss:token'):null;
@@ -536,7 +561,7 @@ async function handler(request, env) {
       const state = row ? JSON.parse(row.state) : market === "US" ? initialUsState() : initialState();
       const date = new URL(request.url).searchParams.get("date");
       if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new RequestError(400,"날짜 형식을 확인해 주세요.");
-      if (date) return json({ report: stockReview(closingReview(state,state.reviews?.[date])) });
+      if (date) return json({ report: stockReview(closingReview(state,state.reviews?.[date]),state.reviewDayCharts?.[date],state.trades) });
       return json(reviewCalendar(state,market,Date.now()));
     }
     if (pathname === "/api/health" && request.method === "GET") return json({ now: Date.now(), batchEnabled: env.MARKETLAB_BATCH === true, api: marketTransport.status(),
@@ -563,6 +588,11 @@ async function handler(request, env) {
     }
     if (request.method === "POST") {
       requireSameOrigin(request);
+      if(['/api/reviews/charts','/api/us/reviews/charts'].includes(pathname)){
+        const {date}=(await body(request))??{};
+        if(typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date)||Number.isNaN(Date.parse(date+'T00:00:00Z'))||new Date(date+'T00:00:00Z').toISOString().slice(0,10)!==date)throw new RequestError(400,'거래일 형식을 확인해 주세요.');
+        return json(await refreshReviewCharts(env,pathname.includes('/us/')?'US':'KR',date));
+      }
       if (["/api/model", "/api/us/model"].includes(pathname)) {
         const config = await body(request), market = pathname.includes("/us/") ? "US" : "KR";
         return json(await locked(env, async (credentials, write, owner) => {
