@@ -71,6 +71,19 @@ async function record(env) {
   return env.DB.prepare("SELECT * FROM campaign WHERE id = 1").first();
 }
 
+// Trusted local host only; the host authenticates and selects this environment.
+// Research reads reuse the running token and the same process-wide market transport.
+export async function readResearchData(env, kind, params = {}) {
+  const row=await record(env);
+  if(!row?.secrets||!row.access_token)throw new RequestError(503,'기존 토스 API 연결이 필요합니다.');
+  const token=await openSecret(env,row.access_token,'toss:token');
+  if(!token?.value||token.expires<=Date.now()+10000)throw new RequestError(503,'기존 API 토큰 갱신을 기다린 뒤 다시 시작해 주세요.');
+  const client=marketClient(token.value);
+  if(kind==='stocks')return client.get('stocks/all',{market:'KOSPI',status:'ACTIVE'});
+  if(kind==='candles'&&/^[A-Z0-9]{6}$/.test(params.symbol)&&Number.isFinite(Date.parse(params.before)))return client.get('candles',{symbol:params.symbol,interval:'1m',count:200,before:params.before,adjusted:false});
+  throw new RequestError(400,'지원하지 않는 연구 조회입니다.');
+}
+
 async function locked(env, work) {
   await env.DB.prepare("INSERT OR IGNORE INTO campaign(id,state) VALUES (1,?)")
     .bind(JSON.stringify(initialState())).run();

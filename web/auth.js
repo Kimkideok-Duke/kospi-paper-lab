@@ -19,7 +19,7 @@ if ($('#login-form')) {
   }
   $('#login-form').addEventListener('submit', async event => {
     event.preventDefault(); const button = $('#auth-submit'); button.disabled = true; message('');
-    try { await api(invite ? 'register' : 'login', { ...Object.fromEntries(new FormData(event.target)), ...(invite ? { invite } : {}) }); location.replace('/'); }
+    try { await api(invite ? 'register' : 'login', { ...Object.fromEntries(new FormData(event.target)), ...(invite ? { invite } : {}) }); location.replace(new URL(location.href).searchParams.get('next')==='/research'?'/research':'/'); }
     catch (e) { message(e.message); } finally { button.disabled = false; }
   });
 }

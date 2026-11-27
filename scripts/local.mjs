@@ -12,7 +12,7 @@ import { startUsBatch } from "../server/us-batch.mjs";
 import { startMonitorBatch, monitorStatus, MONITOR_INTERVAL_MS } from "../server/monitor-batch.mjs";
 import "./build.mjs";
 
-const { default: app, runSlot, runUsSlot, runMonitor } = await import("../dist/server/index.js");
+const { default: app, runSlot, runUsSlot, runMonitor, readResearchData } = await import("../dist/server/index.js");
 const root = process.env.MARKETLAB_DATA ?? resolve(process.env.LOCALAPPDATA ?? homedir(), "MarketLab");
 const port = Number(process.env.MARKETLAB_PORT ?? 8765);
 const origin = "http://127.0.0.1:" + port;
@@ -53,7 +53,7 @@ async function connectionIp() {
 const runtime = { startedAt: Date.now(), lastMonitorTick: null, monitorIntervalMs: MONITOR_INTERVAL_MS };
 const env = { DB, MARKETLAB_KEY: readFileSync(keyFile, "utf8"), MARKETLAB_BATCH: withSchedule, connectionIp, runtimeStatus: () => ({ ...runtime }) };
 
-const host = createLocalHost({ root, masterKey: readFileSync(keyFile, "utf8"), baseEnv: env, app });
+const host = createLocalHost({ root, masterKey: readFileSync(keyFile, "utf8"), baseEnv: env, app, researchRead:readResearchData });
 await host.initialize();
 
 const server = createServer(async (req, res) => {

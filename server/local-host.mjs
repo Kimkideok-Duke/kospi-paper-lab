@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import { createAccounts } from './local-accounts.mjs';
 import { createTenants } from './local-tenants.mjs';
 import { createPublicWatch } from './public-watch.mjs';
+import { createLocalResearch } from './local-research.mjs';
 const publicAssets = { '/login': ['login.html', 'text/html'], '/auth.js': ['auth.js', 'text/javascript'], '/auth.css': ['auth.css', 'text/css'] };
-export function createLocalHost({ root, masterKey, baseEnv, app, ownerCredentials }) {
+export function createLocalHost({ root, masterKey, baseEnv, app, ownerCredentials, researchRead }) {
   if (!ownerCredentials) {
     const configPath = process.env.MARKETLAB_OWNER_CONFIG ?? join(process.env.LOCALAPPDATA ?? root, 'MarketLabHost', 'config.json');
     if (existsSync(configPath)) ownerCredentials = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -17,6 +18,7 @@ export function createLocalHost({ root, masterKey, baseEnv, app, ownerCredential
   }
   const accounts = createAccounts(root, ownerCredentials), tenants = createTenants(root, masterKey);
   const userEnv = id => ({ ...baseEnv, ...tenants.get(id) });
+  const research=createLocalResearch({root,readPage:researchRead});
   const ownerDb = tenants.get('owner');
   const watch = createPublicWatch({ db: ownerDb.DB });
   // Reserve the migrated owner's existing key without sending it to the client or issuing a new token.
@@ -40,7 +42,22 @@ export function createLocalHost({ root, masterKey, baseEnv, app, ownerCredential
     if (['/app.css', '/mark.svg'].includes(path) && request.method === 'GET') return app.fetch(request, baseEnv);
     const auth = await accounts.handle(request); if (auth) return auth;
     const user = accounts.user(request);
-    if (!user) return path.startsWith('/api/') ? Response.json({ error: '로그인이 필요합니다.' }, { status: 401, headers }) : new Response(null, { status: 303, headers: { ...headers, location: '/login' } });
+    if (!user) return path.startsWith('/api/') ? Response.json({ error: '로그인이 필요합니다.' }, { status: 401, headers }) : new Response(null, { status: 303, headers: { ...headers, location: path==='/research'?'/login?next=/research':'/login' } });
+    if(path==='/research'&&request.method==='GET')return file('research.html','text/html');
+    if(path==='/research.js'&&request.method==='GET')return file('research.js','text/javascript');
+    if(path==='/api/research'){
+      try{
+        if(request.method==='GET')return Response.json(await research.status(user.id),{headers});
+        if(request.method!=='POST')return Response.json({error:'지원하지 않는 요청입니다.'},{status:405,headers});
+        if(request.headers.get('origin')!==new URL(request.url).origin||request.headers.get('sec-fetch-site')==='cross-site')return Response.json({error:'이 사이트에서 요청해 주세요.'},{status:403,headers});
+        if(!request.headers.get('content-type')?.startsWith('application/json'))return Response.json({error:'요청 형식을 확인해 주세요.'},{status:400,headers});
+        const raw=await request.text();if(raw.length>1000)return Response.json({error:'요청이 너무 깁니다.'},{status:413,headers});
+        const body=JSON.parse(raw);
+        if(body?.action==='stop')return Response.json(research.stop(user.id),{headers});
+        if(body?.action!=='start')return Response.json({error:'작업을 확인해 주세요.'},{status:400,headers});
+        return Response.json(await research.start(user.id,userEnv(user.id),body),{status:202,headers});
+      }catch(e){return Response.json({error:e.status?e.message:'연구 자료 요청을 처리하지 못했습니다.'},{status:e.status??400,headers});}
+    }
     if (path === '/account' && request.method === 'GET') return file('account.html', 'text/html');
     const scoped = new Headers(request.headers);
     scoped.set('oai-authenticated-user-id', user.id);
@@ -72,5 +89,5 @@ export function createLocalHost({ root, masterKey, baseEnv, app, ownerCredential
       : results.some(r => r?.status === 'duplicate') ? 'duplicate' : results.every(r => r?.status === 'waiting') ? 'waiting' : 'outside';
     return { status, message: status === 'error' ? '일부 사용자의 자동 분석을 완료하지 못했습니다.' : '사용자별 모의 분석을 처리했습니다.', trades: [] };
   }
-  return { fetch, initialize, runAll, close() { accounts.close(); tenants.close(); } };
+  return { fetch, initialize, runAll, close() { const pending=research.close();const finish=()=>{accounts.close();tenants.close();};if(pending)return pending.finally(finish);finish(); } };
 }
