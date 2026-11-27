@@ -3,6 +3,7 @@ import { randomBytes, scryptSync } from 'node:crypto';
 import { join } from 'node:path';
 import { createAccounts } from './local-accounts.mjs';
 import { createTenants } from './local-tenants.mjs';
+import { createPublicWatch } from './public-watch.mjs';
 const publicAssets = { '/login': ['login.html', 'text/html'], '/auth.js': ['auth.js', 'text/javascript'], '/auth.css': ['auth.css', 'text/css'] };
 export function createLocalHost({ root, masterKey, baseEnv, app, ownerCredentials }) {
   if (!ownerCredentials) {
@@ -17,6 +18,7 @@ export function createLocalHost({ root, masterKey, baseEnv, app, ownerCredential
   const accounts = createAccounts(root, ownerCredentials), tenants = createTenants(root, masterKey);
   const userEnv = id => ({ ...baseEnv, ...tenants.get(id) });
   const ownerDb = tenants.get('owner');
+  const watch = createPublicWatch({ db: ownerDb.DB });
   // Reserve the migrated owner's existing key without sending it to the client or issuing a new token.
   const saved = ownerDb.DB.prepare('SELECT secrets FROM campaign WHERE id=1');
   const initialize = async () => {
@@ -33,6 +35,7 @@ export function createLocalHost({ root, masterKey, baseEnv, app, ownerCredential
   const connecting = new Set();
   async function fetch(request) {
     const path = new URL(request.url).pathname;
+    const publicView = await watch(request); if (publicView) return publicView;
     if (Object.hasOwn(publicAssets, path) && request.method === 'GET') return file(...publicAssets[path]);
     if (['/app.css', '/mark.svg'].includes(path) && request.method === 'GET') return app.fetch(request, baseEnv);
     const auth = await accounts.handle(request); if (auth) return auth;

@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow,noarchive"><title>마켓랩 · 공개 관람</title><link rel="stylesheet" href="/watch/watch.css"><script src="/watch/watch.js" defer></script></head>
+<body><main><header><div class="brand">MARKET LAB <span>PUBLIC VIEW</span></div><span class="badge">모의투자 · 관람 전용</span></header>
+<section class="intro"><p class="eyebrow">거래를 지켜보는 공간</p><h1>시장의 흐름 속,<br>모의 거래의 기록.</h1><p>국내장과 미국장의 모의 포트폴리오를 확인하세요.<br>실제 자금으로 거래한 결과가 아닙니다.</p></section>
+<div class="toolbar"><nav aria-label="시장 선택"><button id="kr" type="button" aria-pressed="true">국내장</button><button id="us" type="button" aria-pressed="false">미국장</button></nav><span id="updated">연결 중</span></div>
+<p id="status" role="status" aria-live="polite">관람 연결을 확인하고 있습니다.</p><button id="retry" type="button" hidden>다시 접속</button>
+<section id="content" hidden><div class="stats" id="stats"></div><section class="panel"><div class="heading"><h2>평가자산 추이</h2><span>원화 기준 · 저장된 관측값</span></div><svg id="chart" viewBox="0 0 900 200" role="img" aria-label="평가자산 추이"></svg><p id="chart-note" class="muted"></p></section>
+<section class="panel"><h2>보유 종목</h2><div class="scroll"><table><thead><tr><th>종목</th><th>수량</th><th>관측 가격</th><th>평가금액</th></tr></thead><tbody id="positions"></tbody></table></div></section>
+<section class="panel"><div class="heading"><h2>최근 체결</h2><span>최근 100건 · 부분 체결 포함</span></div><div class="scroll"><table><thead><tr><th>체결 시각</th><th>종목</th><th>매매</th><th>수량</th><th>체결 가격</th><th>실현손익</th></tr></thead><tbody id="trades"></tbody></table></div></section></section>
+<footer>30초 간격으로 갱신 · 최대 20개 관람 연결<br>미국 종목 가격은 달러, 평가자산과 손익은 원화 기준입니다. 저장 시세와 모의 체결에는 지연·누락이 있을 수 있습니다.</footer></main></body></html>

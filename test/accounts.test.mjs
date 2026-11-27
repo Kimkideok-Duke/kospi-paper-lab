@@ -41,6 +41,10 @@ test('owner data survives migration; invited users have separate KR/US balances,
   state.reviewDayCharts={'2026-11-25':{status:'complete',revision:1,confirmed:1,targets:[{symbol:'005930'}],records:{'005930':{status:'confirmed',checkedAt:Date.parse('2026-11-25T16:00:00+09:00'),candles:[{time:Date.parse('2026-11-25T15:30:00+09:00'),open:12300,high:12400,low:12200,close:12390,volume:100}]}}}};
   db.prepare('INSERT INTO campaign(id,state) VALUES(1,?)').run(JSON.stringify(state)); db.close();
   const owner = await login(), member = await register(owner);
+  const publicJoin=await call('/watch/join',{}),viewer=publicJoin.headers.get('set-cookie').split(';')[0];
+  assert.equal(publicJoin.status,200);assert.equal((await call('/watch/data',undefined,viewer)).status,200);
+  assert.equal((await call('/api/state',undefined,viewer,{'oai-authenticated-user-id':'owner'})).status,401);
+  assert.equal((await call('/api/manual-run',{},viewer)).status,401);
   for(const path of ['/api/reviews/charts','/api/us/reviews/charts']) {
     assert.equal((await call(path,{date:'2026-02-30'},owner)).status,400);
     assert.equal((await call(path,{date:'2026-11-25'},owner,{origin:'https://evil.example'})).status,403);
