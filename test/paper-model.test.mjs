@@ -326,3 +326,29 @@ test("adverse news cancels an unfilled entry and replaces an existing profit tar
   assert.equal(targets[0].status,"CANCELED"); assert.equal(s.positions.length,0);
   assert.equal(s.trades.at(-1).source,"event");
 });
+
+test("stop remainder follows a fresh executable bid and re-entry waits after the last stop fill", () => {
+  const s=upgradePaper(initialState(),"KR",now);
+  s.cash=101000;
+  execute(s,{...context(),candidates:[candidate()]});
+  const down=context(now+10000,9600);
+  down.books.get("005930").bids[0].price="9500";
+  assert.equal(execute(s,down).length,0);
+  const crash=context(now+15000,9400);
+  const sale=execute(s,crash);
+  assert.equal(sale[0].price,9395);
+  assert.equal(s.paperOrders.at(-1).reference,9600);
+  execute(s,{...context(now+20000),candidates:[candidate()]});
+  assert.equal(s.entryObservations.at(-1).decision,"손절 후 30분 대기");
+});
+test("overheated candidate records alternatives and later quote without spending cash", () => {
+  const s=upgradePaper(initialState(),"KR",now);
+  execute(s,{...context(),candidates:[{...candidate(),momentum:3}]});
+  const row=s.entryObservations[0];
+  assert.equal(s.paperOrders.length,0);
+  assert.deepEqual(Object.values(row.probes).map(p=>p.quantity),[3,0,1]);
+  execute(s,context(now+600000,9900));
+  assert.equal(row.afterPrice,9900);
+  assert.deepEqual(Object.values(row.probes).map(p=>p.quantity),[3,3,3]);
+  assert.equal(s.cash,10000000);
+});

@@ -1,5 +1,5 @@
 import { activateDailyPolicy } from "./strategy-policy.mjs";
-export const MODEL_VERSION = "paper-v6-resting-limits";
+export const MODEL_VERSION = "paper-v7-protective-exits";
 export const defaults = market => ({ commissionBps: market === "US" ? 10 : 1.5, taxBps: market === "US" ? 0 : 20,
   fxSpreadBps: market === "US" ? 10 : 0, participationPct: 10, limitBps: 20, ttlSeconds: 300 });
 export const activeOrder = order => ["PENDING", "PARTIAL_FILLED"].includes(order.status);
@@ -18,7 +18,7 @@ export function upgradePaper(state, market, now) {
     for (const order of state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY")) { order.status = "CANCELED"; order.note = "전략 버전 변경: 다음 분석에서 새 규칙으로 평가"; }
     state.paperModel = { enabled: true, code: MODEL_VERSION, version: MODEL_VERSION + ":" + (state.versions.length + 1), config, appliedAt: now };
     state.versions.push({ id: state.paperModel.version, time: now, baseline: paperTotal(state, market),
-      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 5초 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · 눌림 지정가/목표가 사전 주문 · −2.5%/+5%" });
+      tradeCount: state.trades.length, config: { ...config }, rules: "10분 분석 · 5초 보유 감시 · 호가 잔량 10% · 5종목 · 종목별 비중 상한 없음 · 가용 현금 내 주문 · 장중 뉴스 2분/공시 1분 · 급등 추격 제한 · 손절 후 30분 대기 · 보호 매도 잔량 재평가 · −2.5%/+5%" });
   }
   activateDailyPolicy(state, market, now);
   if (state.monitorPolicy?.intervalMs !== 5000) {
@@ -67,6 +67,31 @@ function amounts(price, quantity, side, type, market, fx, config) {
   const fxSpread = market === "US" ? Math.ceil(gross * config.fxSpreadBps / 10000) : 0;
   return { gross, commission, transactionTax, fxSpread, settlement: side === "BUY" ? gross + commission + fxSpread : gross - commission - transactionTax - fxSpread };
 }
+// Independent three-share paper probes. Never reserve cash or consume book liquidity.
+function observeExecution(row, book, now, currency) {
+  const stamp = Date.parse(book?.timestamp);
+  const age = now - row.time;
+  if (age < 0 || age > 600000 || book?.currency !== currency || !Number.isFinite(stamp)
+      || stamp < row.time - 30000 || now - stamp > 30000 || stamp > now + 3000
+      || stamp <= (row.lastBook ?? -Infinity)) return;
+  const asks = (book.asks ?? []).filter(l => Number(l.price)>0 && Number(l.volume)>0)
+    .sort((a,b)=>Number(a.price)-Number(b.price)).slice(0,5);
+  const bid = Math.max(...(book.bids ?? []).filter(l=>Number(l.volume)>0).map(l=>Number(l.price)));
+  if (!(bid > 0 && asks.length && Number(asks[0].price) >= bid)) return;
+  row.lastBook = stamp;
+  row.bookCount = (row.bookCount ?? 0) + 1;
+  for (const [style, probe] of Object.entries(row.probes)) {
+    const due = style === 'split' ? Math.min(3,1+Math.floor(age/180000)) : 3;
+    const limit = row.price * (1 + (style === 'resting' ? -1 : 1) * row.limitBps/10000);
+    for (const level of asks) {
+      if (Number(level.price) > limit) break;
+      const quantity = Math.min(due-probe.quantity,Math.floor(Number(level.volume)*row.participationPct/100));
+      probe.quantity += quantity;
+      probe.amount += quantity * Number(level.price);
+    }
+  }
+}
+
 export function executePaper(state, { market, now, regularStart, regularEnd, quotes, books = new Map(), candidates = [], previous,
   review = false, manual = false, monitor = false, event = false, fx = null, reasonFor, openingExit }) {
   const config = state.paperModel.config;
@@ -121,7 +146,34 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
         style: "RESTING_TAKE_PROFIT", limitPrice: target, ttlSeconds: (regularEnd - now) / 1000 });
     }
   }
+  // Use the next scan's fresh quote for a fixed-horizon candidate comparison.
+  const observations = state.entryObservations ??= [];
+  if (!monitor) for (const row of observations) {
+    const age = now - row.time;
+    const quote = quotes.get(row.symbol);
+    if (row.session === regularStart && row.afterPrice == null && age >= 600000 && age <= 720000
+        && fresh(quote) && quote.time >= row.time + 600000) {
+      row.afterPrice = quote.price;
+      row.afterTime = quote.time;
+    }
+  }
   if (!monitor) for (const c of candidates) {
+    const signal = quotes.get(c.symbol);
+    if (!fresh(signal)) continue;
+    const observation = {symbol:c.symbol, session:regularStart, time:now, price:signal.price, score:c.score ?? null,
+      momentum:c.momentum ?? null, decision:'기타 진입 조건 미충족', version:state.paperModel.version};
+    Object.assign(observation, {limitBps:config.limitBps, participationPct:config.participationPct,
+      probes:Object.fromEntries(['immediate','resting','split'].map(style=>[style,{quantity:0,amount:0}]))});
+    observations.push(observation);
+    const stopped = state.trades.findLast(t => t.symbol === c.symbol && t.side === 'SELL' && t.reason?.includes('손절'));
+    if (stopped && now - stopped.time < 30 * 60000) {
+      observation.decision = '손절 후 30분 대기';
+      continue;
+    }
+    if (c.momentum >= 3) {
+      observation.decision = '최근 분봉 3% 이상 급등';
+      continue;
+    }
     const occupied = new Set([...state.positions.map(p => p.symbol), ...state.paperOrders.filter(o => activeOrder(o) && o.side === "BUY").map(o => o.symbol)]);
     if (occupied.size >= 5 || occupied.has(c.symbol) || pending(c.symbol, "SELL") || (state.eventWatch?.blocks?.[c.symbol]?.until ?? 0) > now) continue;
     const q = quotes.get(c.symbol);
@@ -133,8 +185,17 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
     if (!(limit > 0) || (!immediate && !c.validPrice(limit))) continue;
     let quantity = Math.floor(budget / (limit * fx.rate * (1 + (config.commissionBps + config.fxSpreadBps) / 10000)));
     while (quantity > 0 && amounts(limit, quantity, "BUY", c.type, market, fx.rate, config).settlement > budget) quantity--;
-    if (quantity > 0) newOrder(c, "BUY", quantity, q, c.reason + (immediate ? " · 강한 상승세/뉴스 반응 즉시 체결 우선" : " · 눌림 가격 사전 지정 주문"), {
+    if (quantity < 1) continue;
+    observation.decision = immediate ? "즉시 지정가" : "눌림 지정가";
+    newOrder(c, "BUY", quantity, q, c.reason + (immediate ? " · 강한 상승세/뉴스 반응 즉시 체결 우선" : " · 눌림 가격 사전 지정 주문"), {
       style: immediate ? "MARKETABLE_LIMIT" : "RESTING_ENTRY", limitPrice: limit, ttlSeconds: immediate ? config.ttlSeconds : 900 });
+    observation.orderId = state.paperOrders.at(-1).id;
+  }
+  if (observations.length > 3000) observations.splice(0, observations.length - 3000);
+  for (let i = observations.length - 1; i >= 0; i--) {
+    const row = observations[i];
+    if (now - row.time > 600000) break;
+    if (row.probes && row.session === regularStart) observeExecution(row, books.get(row.symbol), now, market === 'US' ? 'USD' : 'KRW');
   }
   const orders = state.paperOrders.filter(activeOrder).sort((a, b) => (a.side === "SELL" ? 0 : 1) - (b.side === "SELL" ? 0 : 1));
   for (const order of orders) {
@@ -147,7 +208,15 @@ export function executePaper(state, { market, now, regularStart, regularEnd, quo
       .map(l => ({ price: Number(l.price), volume: Math.floor(Number(l.volume)) })).sort((a, b) => order.side === "BUY" ? a.price - b.price : b.price - a.price).slice(0, 5) ?? [];
     const bestAsk = Math.min(...(book.asks ?? []).map(l => Number(l.price)).filter(p => p > 0));
     const bestBid = Math.max(...(book.bids ?? []).map(l => Number(l.price)).filter(p => p > 0));
-    if (!(bestAsk >= bestBid && bestBid > 0)) { order.note = "비정상 호가로 대기"; continue; }
+    if (!(Number.isFinite(bestAsk) && Number.isFinite(bestBid) && bestAsk >= bestBid && bestBid > 0)) { order.note = "비정상 호가로 대기"; continue; }
+    if (order.side === 'SELL' && order.reason?.includes('손절') && levels.length &&
+        time >= order.createdAt && time > (order.lastProtectionBook ?? -Infinity) &&
+        now - order.createdAt >= 5000 && levels[0].price < order.limitPrice) {
+      order.initialLimitPrice ??= order.limitPrice;
+      order.limitPrice = levels[0].price;
+      order.lastProtectionBook = time;
+      order.reprices = (order.reprices ?? 0) + 1;
+    }
     for (const level of levels) {
       if (order.filledQuantity >= order.quantity) break;
       if (order.side === "BUY" ? level.price > order.limitPrice : level.price < order.limitPrice) continue;

@@ -65,7 +65,9 @@ export function analyticsView(state, market) {
   const estimatedCapitalTax = Object.values(yearly).reduce((sum, value) => sum + Math.floor(Math.max(0, value - 2_500_000) * 0.22), 0);
   const daily = (state.daily ?? []).map((row, index, rows) => ({ ...row, pnl: row.close - (rows[index - 1]?.close ?? row.open),
     returnPct: ((row.close / (rows[index - 1]?.close ?? row.open)) - 1) * 100 }));
-  return { maxDrawdownPct, tradeCount: state.trades.length, sellFillCount: sells.length,
+  return { entryComparisons: (state.entryObservations ?? []).slice(-100).map(row => ({ ...row,
+    forwardReturnPct: row.afterPrice > 0 ? (row.afterPrice / row.price - 1) * 100 : null })),
+    maxDrawdownPct, tradeCount: state.trades.length, sellFillCount: sells.length,
     winRate: sells.length ? wins.length / sells.length * 100 : null, averageWin: wins.length ? profit / wins.length : null,
     averageLoss: losses.length ? loss / losses.length : null, profitFactor: loss ? profit / loss : null,
     maxLossStreak, costs, explicitCosts, pnlBeforeExplicitCosts: total - 10_000_000 + explicitCosts,
