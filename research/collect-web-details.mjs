@@ -2,6 +2,8 @@ import {readFile,writeFile,readdir,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {parseNewsDetail,dartDocumentUrl} from './web-history.mjs';
 const root='outputs/research/web-history',dir=root+'/details';
+const selectedDate=process.argv.find(v=>v.startsWith('--date='))?.slice(7);
+if(selectedDate&&!/^\d{4}-\d{2}-\d{2}$/.test(selectedDate))throw Error('날짜 형식을 확인해 주세요.');
 await mkdir(dir,{recursive:true});
 let news=0,disclosures=0,newsUnavailable=false;
 async function html(url){
@@ -11,7 +13,7 @@ async function html(url){
   await new Promise(resolve=>setTimeout(resolve,350));
   return t;
 }
-for(const file of (await readdir(root)).filter(n=>/^2026.*json$/.test(n)).sort()){
+for(const file of (await readdir(root)).filter(n=>/^2026.*json$/.test(n)&&(!selectedDate||n===selectedDate+'.json')).sort()){
   const day=JSON.parse(await readFile(root+'/'+file,'utf8'));
   const output=dir+'/'+file;
   let saved={};try{saved=JSON.parse(await readFile(output,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}

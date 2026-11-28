@@ -21,7 +21,13 @@ export function createLocalResearch({ root, readPage, delay = pause, now = () =>
   }
   async function saved(id) { try { return JSON.parse(await readFile(join(directory(id),'manifest.json'),'utf8')); } catch (e) { if (e.code==='ENOENT') return null; throw e; } }
   async function status(id) {
-    const item=running.get(id); if(item) return structuredClone(item.manifest);
+    const item=running.get(id);
+    if(item){
+      const manifest=structuredClone(item.manifest);
+      // A terminal result is resumable only after its final checkpoint has
+      // committed and the running slot has been released.
+      return manifest.status==='running'?manifest:{...manifest,status:'running',message:'마지막 진행 상태를 저장하고 있습니다.'};
+    }
     const manifest=await saved(id);
     if(manifest?.status==='running') return {...manifest,status:'interrupted',message:'서버 재시작으로 중단되었습니다. 이어받기를 누르세요.'};
     return manifest ?? {status:'idle',message:'기존 연결로 과거 분봉을 수집합니다.'};

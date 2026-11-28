@@ -2,9 +2,17 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {parseDart,parseNews} from './web-history.mjs';
 const root='outputs/research/web-history';
 await mkdir(root,{recursive:true});
-const {bars}=JSON.parse(await readFile('outputs/research/kospi-daily.json','utf8'));
+const {bars:allBars}=JSON.parse(await readFile('outputs/research/kospi-daily.json','utf8'));
+const selectedDate=process.argv.find(v=>v.startsWith('--date='))?.slice(7);
+if(selectedDate&&!allBars.some(b=>b.date===selectedDate))throw Error('확인된 지수 거래일 중 수집 날짜를 선택해 주세요.');
+const bars=selectedDate?allBars.filter(b=>b.date===selectedDate):allBars;
 const maxNewsPages=Number(process.argv[2]??3);
+if(!Number.isSafeInteger(maxNewsPages)||maxNewsPages<1||maxNewsPages>20)throw Error('뉴스 목록 페이지 수는1~20 사이 정수로 지정해 주세요.');
 const coverage=[];
+if(selectedDate){
+  try{const prior=JSON.parse(await readFile(root+'/coverage.json','utf8'));coverage.push(...(prior.coverage??[]).filter(r=>r.date!==selectedDate));}
+  catch(e){if(e.code!=='ENOENT')throw e;}
+}
 async function request(url) {
   const response=await fetch(url,{signal:AbortSignal.timeout(20000)});
   if(!response.ok)throw Error('HTTP '+response.status);
