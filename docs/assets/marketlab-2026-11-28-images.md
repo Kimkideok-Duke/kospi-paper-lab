@@ -1,0 +1,10 @@
+# 2026-11-28 개발기 이미지 제작 정보
+
+- 용도: 개발기04의 별도 제목 표지와 연구 통과 조건 설명 도식. 표지는 대표 이미지에만 사용하고 본문에는 흐름도를 넣는다.
+- 원본: `marketlab-2026-11-28-cover.svg`(1280×720), `marketlab-2026-11-28-research-gates.svg`(1280×860).
+- 배포: 같은 이름의 PNG, 각각2560×1440·2560×1720. Windows System.Drawing과 맑은 고딕으로 2배 렌더링했다.
+- 재현: `render-2026-11-28-diagram.ps1 -ImageName marketlab-2026-11-28-cover`, `-ImageName marketlab-2026-11-28-research-gates`.
+- 제작: 정확한 코드 설명을 위해 직접 작성한 SVG. 생성형 이미지 모델은 사용하지 않았다. 출처는 이 저장소0511ae4의 `research/replay.mjs`, `research/evidence.mjs`, `research/audit-candles.mjs`다.
+- 권리: 프로젝트용 자체 제작 자산. 제3자 사진·아이콘·로고를 사용하지 않았으며 시스템 글꼴 파일은 포함하지 않는다. 이 도식과 표지는 CC BY 4.0으로 제공한다.
+- 실제 계좌·매매·시세·성과 자료는 없다. 최소 표본 조건이 통계적 충분성을 보장하거나 실제 시장 재현이 완료됐다는 뜻은 아니다.
+- 공개 확인: 게시 전. 본문은 공개 저장소 PNG, 대표 표지는 Velog 정식 업로드를 사용한다.

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="860" viewBox="0 0 1280 860">
+<rect width="1280" height="860" fill="#f2f6fa"/><g font-family="Malgun Gothic,sans-serif">
+<text x="64" y="76" font-size="32" font-weight="700" fill="#19364b">연구 후보가 되기 전, 확인하는 것들</text>
+<text x="64" y="118" font-size="19" fill="#46647a">실제 구현 흐름 · 역사 자료와 시점이 확인되지 않으면 비교 중단</text>
+<rect x="64" y="158" width="1152" height="100" rx="16" fill="#dceaf4"/><text x="96" y="200" font-size="25" font-weight="700" fill="#19364b">1. 입력 자료 검사</text><text x="96" y="236" font-size="19" fill="#304f65">당시 가용 정보 · 호가 정렬과 유효성 · 페이지 연결과 중복/충돌</text>
+<line x1="640" y1="258" x2="640" y2="294" stroke="#567a90" stroke-width="3"/><polygon points="633,284 647,284 640,296" fill="#567a90"/>
+<rect x="64" y="300" width="550" height="130" rx="16" fill="#e0eee9"/><rect x="666" y="300" width="550" height="130" rx="16" fill="#e0eee9"/>
+<text x="96" y="345" font-size="25" font-weight="700" fill="#19364b">2. 학습 구간 / 5~8월</text><text x="96" y="385" font-size="19" fill="#304f65">완결 매매 5회 · 청산 날짜 2일 이상</text><text x="698" y="345" font-size="25" font-weight="700" fill="#19364b">3. 검증 구간 / 9~10월</text><text x="698" y="385" font-size="19" fill="#304f65">동일 표본 조건 + 기준선과 비교</text>
+<line x1="640" y1="438" x2="640" y2="472" stroke="#567a90" stroke-width="3"/><polygon points="633,462 647,462 640,474" fill="#567a90"/>
+<rect x="64" y="480" width="1152" height="128" rx="16" fill="#193c55"/><text x="96" y="525" font-size="25" font-weight="700" fill="#ffffff">수익 개선 + 낙폭·비용·슬리피지 악화 없음</text><text x="96" y="567" font-size="19" fill="#c9dce6">미충족 조건은 기각 이유로 기록 · 자료 없는 기간을 수익률 0%로 채우지 않음</text>
+<line x1="640" y1="608" x2="640" y2="644" stroke="#567a90" stroke-width="3"/><polygon points="633,634 647,634 640,646" fill="#567a90"/>
+<rect x="64" y="652" width="1152" height="112" rx="16" fill="#e4e5f3"/><text x="96" y="695" font-size="25" font-weight="700" fill="#19364b">4. 선정 후보가 있을 때 11월 별도 평가</text><text x="96" y="735" font-size="19" fill="#304f65">후보와 기준선 함께 계산 · 운영 전략에 자동 적용하지 않음</text>
+<text x="64" y="816" font-size="18" fill="#526d80">설명용 자체 제작 도식 / 실제 수익·계좌·시세 자료 없음 / 성과 검증 완료를 뜻하지 않음</text></g></svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<rect width="1280" height="720" fill="#14263d"/><rect x="64" y="64" width="1152" height="592" rx="24" fill="#1d3550"/>
+<g font-family="Malgun Gothic,sans-serif">
+<text x="112" y="144" font-size="22" font-weight="700" fill="#83deca">MARKET LAB / 04</text>
+<text x="112" y="246" font-size="44" font-weight="700" fill="#ffffff">백테스트 수익률을 고르기 전에,</text>
+<text x="112" y="314" font-size="44" font-weight="700" fill="#ffffff">통과 기준부터 고쳤다</text>
+<text x="112" y="378" font-size="23" fill="#bed3e2">부분 매도 횟수에서 완결 매매와 기준선 비교로</text>
+<rect x="112" y="432" width="300" height="100" rx="14" fill="#284c67"/><rect x="490" y="432" width="300" height="100" rx="14" fill="#284c67"/><rect x="868" y="432" width="300" height="100" rx="14" fill="#284c67"/>
+<text x="262" y="494" text-anchor="middle" font-size="28" font-weight="700" fill="#ffffff">표본의 단위</text><text x="640" y="494" text-anchor="middle" font-size="28" font-weight="700" fill="#ffffff">비교의 기준</text><text x="1018" y="494" text-anchor="middle" font-size="28" font-weight="700" fill="#ffffff">자료의 경계</text>
+<text x="112" y="606" font-size="18" fill="#9dbbcb">2026.11.28 개발 기록 · 코드 검증과 투자 성과 검증을 구분하기</text></g></svg>
