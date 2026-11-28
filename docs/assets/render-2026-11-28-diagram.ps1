@@ -23,4 +23,3 @@ foreach($element in $diagram.SelectNodes('//*')) {
 }
 $bitmap.Save((Join-Path $assetRoot ($ImageName+'.png')),[System.Drawing.Imaging.ImageFormat]::Png)
 $graphics.Dispose();$bitmap.Dispose()
-
